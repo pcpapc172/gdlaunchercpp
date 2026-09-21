@@ -80,13 +80,18 @@ bool GameLauncher::checkProcessRunning(const QString &processName) const {
 
 GameLauncher::PrepResult GameLauncher::prepareLocalAppData(const QString &localPath, const QString &infoPath, bool isTour) {
     PrepResult res;
+    GD_DEBUG_LOG("transfer", QString("Scanning %1 for unmanaged/leftover save data").arg(localPath));
     const QStringList allItems = InstanceManager::getAllManagedItems();
     QStringList foundInAppData;
     for (const QString &item : allItems) {
         if (QFileInfo::exists(localPath + "/" + item)) foundInAppData << item;
     }
 
-    if (foundInAppData.isEmpty()) { res.success = true; res.found = false; return res; }
+    if (foundInAppData.isEmpty()) {
+        GD_DEBUG_LOG("transfer", "Nothing found there; skipping.");
+        res.success = true; res.found = false; return res;
+    }
+    GD_DEBUG_LOG("transfer", QString("Found: %1").arg(foundInAppData.join(", ")));
 
     if (QFileInfo::exists(infoPath)) {
         if (isTour) { res.success = true; res.found = false; return res; }
@@ -96,6 +101,8 @@ GameLauncher::PrepResult GameLauncher::prepareLocalAppData(const QString &localP
         f.close();
         const QString targetDir = Settings::instancesDir() + "/" + info.value("instanceName").toString();
         if (!QFileInfo::exists(targetDir + "/instance.json")) {
+            GD_DEBUG_LOG("transfer", QString("Stale info.json pointed at missing instance '%1'; discarding.")
+                .arg(info.value("instanceName").toString()));
             QFile::remove(infoPath);
             res.success = true;
             return res;
@@ -104,12 +111,15 @@ GameLauncher::PrepResult GameLauncher::prepareLocalAppData(const QString &localP
         pf.open(QIODevice::ReadOnly);
         QJsonObject prevData = QJsonDocument::fromJson(pf.readAll()).object();
         pf.close();
+        GD_DEBUG_LOG("transfer", QString("Recovering leftover data back into instance '%1' (previous run likely crashed before syncing)")
+            .arg(info.value("instanceName").toString()));
         InstanceManager::transferManagedItems(
             linuxAppDataPath(prevData.value("saveFolderName").toString()), targetDir,
             InstanceManager::getManagedItems(prevData.value("isGeodeCompatible").toBool(),
                                               prevData.value("useMegaHack").toBool()),
             true);
         QFile::remove(infoPath);
+        GD_DEBUG_LOG("transfer", "Recovery transfer complete.");
         res.success = true; res.found = true;
         return res;
     }
@@ -127,6 +137,7 @@ GameLauncher::PrepResult GameLauncher::prepareLocalAppData(const QString &localP
     if (box.clickedButton() == importBtn) {
         const QString newName = "Imported_" + QDateTime::currentDateTimeUtc().toString("yyyy-MM-ddTHH-mm-ss");
         const QString newInstancePath = Settings::instancesDir() + "/" + newName;
+        GD_DEBUG_LOG("transfer", QString("Importing unmanaged data as new instance '%1'").arg(newName));
         QDir().mkpath(newInstancePath);
         QJsonObject instanceData;
         instanceData["name"] = newName;
@@ -141,14 +152,18 @@ GameLauncher::PrepResult GameLauncher::prepareLocalAppData(const QString &localP
         jf.write(QJsonDocument(instanceData).toJson(QJsonDocument::Indented));
         jf.close();
         InstanceManager::transferManagedItems(localPath, newInstancePath, foundInAppData, true);
+        GD_DEBUG_LOG("transfer", "Import complete.");
         res.success = true; res.found = true;
     } else if (box.clickedButton() == trashBtn) {
         const QString trashFolder = Settings::trashDir() + "/UnmanagedData_" +
                                      QDateTime::currentDateTimeUtc().toString("yyyy-MM-ddTHH-mm-ss-zzz");
+        GD_DEBUG_LOG("transfer", QString("Moving unmanaged data to trash: %1").arg(trashFolder));
         QDir().mkpath(trashFolder);
         InstanceManager::transferManagedItems(localPath, trashFolder, foundInAppData, true);
+        GD_DEBUG_LOG("transfer", "Moved to trash.");
         res.success = true; res.found = true;
     } else {
+        GD_DEBUG_LOG("transfer", "User cancelled the unmanaged-data prompt; launch aborted.");
         res.success = false; res.error = "Launch cancelled by user.";
     }
     return res;
@@ -251,10 +266,16 @@ void GameLauncher::launchInstance(const QString &instanceName) {
 
     ctx.managedItems = InstanceManager::getManagedItems(data.value("isGeodeCompatible").toBool(),
                                                           data.value("useMegaHack").toBool());
+    GD_DEBUG_LOG("transfer", QString("Copying instance -> game save folder (%1): %2")
+        .arg(ctx.localAppDataPath, ctx.managedItems.join(", ")));
     InstanceManager::transferManagedItems(instancePath, ctx.localAppDataPath, ctx.managedItems, false,
         [this, instanceName](const QString &file, int current) {
             emit statusUpdate(QString("Preparing instance %1 (%2) — %3 files").arg(instanceName, file).arg(current));
+            // Logged every 25 files instead of per-file -- geode/mods or large custom-level
+            // folders can easily be thousands of files, which would otherwise flood the console.
+            if (current % 25 == 0) GD_DEBUG_LOG("transfer", QString("  ...%1 files copied so far (%2)").arg(current).arg(file));
         });
+    GD_DEBUG_LOG("transfer", "Instance prep transfer complete.");
 
     QJsonObject infoJson; infoJson["instanceName"] = instanceName;
     QFile infoOut(ctx.infoJsonPath);
@@ -301,10 +322,12 @@ void GameLauncher::launchInstance(const QString &instanceName) {
 }
 
 void GameLauncher::beginMonitor(LaunchContext ctx) {
+    GD_DEBUG_LOG("launch", QString("Watching process '%1' every 2s").arg(ctx.processName));
     m_monitorTimer = new QTimer(this);
     m_monitorTimer->setInterval(2000);
     connect(m_monitorTimer, &QTimer::timeout, this, [this, ctx]() mutable {
         if (!checkProcessRunning(ctx.processName)) {
+            GD_DEBUG_LOG("launch", QString("Process '%1' no longer running").arg(ctx.processName));
             m_monitorTimer->stop();
             m_monitorTimer->deleteLater();
             m_monitorTimer = nullptr;
@@ -317,6 +340,7 @@ void GameLauncher::beginMonitor(LaunchContext ctx) {
 void GameLauncher::watchForExit(LaunchContext ctx) {
     const bool skipRestart = ctx.data.value("skipRestartCheck").toBool(false) || ctx.syncDelay == 0;
     if (skipRestart) {
+        GD_DEBUG_LOG("launch", "Restart check skipped (disabled or 0s delay); syncing now.");
         m_gameRunning = false;
         emit gameStopped();
         emit logStatusChanged(false);
@@ -324,11 +348,13 @@ void GameLauncher::watchForExit(LaunchContext ctx) {
         return;
     }
 
+    GD_DEBUG_LOG("launch", QString("Waiting %1s to see if the process restarts (Geode reload, etc.) before syncing").arg(ctx.syncDelay / 1000));
     emit statusUpdate(QString("Process ended. Waiting %1s for restart check...").arg(ctx.syncDelay / 1000));
 
     QTimer::singleShot(ctx.syncDelay, this, [this, ctx]() mutable {
         const bool restarted = checkProcessRunning(ctx.processName);
         if (!restarted) {
+            GD_DEBUG_LOG("launch", "No restart detected; proceeding to sync.");
             m_gameRunning = false;
             emit gameStopped();
             emit logStatusChanged(false);
@@ -336,6 +362,7 @@ void GameLauncher::watchForExit(LaunchContext ctx) {
             return;
         }
 
+        GD_DEBUG_LOG("launch", "Process restarted; resuming watch instead of syncing.");
         if (ctx.enableLogOutput) {
             appendLog(QString("[%1] [info] Game restarted — logging of new process output is not supported by the launcher")
                           .arg(QTime::currentTime().toString()));
@@ -348,24 +375,33 @@ void GameLauncher::watchForExit(LaunchContext ctx) {
 void GameLauncher::postLaunchCleanup(LaunchContext ctx) {
     m_syncing = true;
     emit statusUpdate(QString("Syncing data for %1...").arg(ctx.instanceName));
+    GD_DEBUG_LOG("transfer", QString("Syncing game save folder -> instance '%1': %2")
+        .arg(ctx.instanceName, ctx.managedItems.join(", ")));
 
     const QString instancePath = Settings::instancesDir() + "/" + ctx.instanceName;
     InstanceManager::transferManagedItems(ctx.localAppDataPath, instancePath, ctx.managedItems, true,
         [this, ctx](const QString &file, int current) {
             emit statusUpdate(QString("Syncing %1 (%2) — %3 files").arg(ctx.instanceName, file).arg(current));
+            if (current % 25 == 0) GD_DEBUG_LOG("transfer", QString("  ...%1 files synced so far (%2)").arg(current).arg(file));
         });
+    GD_DEBUG_LOG("transfer", "Sync-back complete.");
 
     if (QFileInfo::exists(ctx.infoJsonPath)) QFile::remove(ctx.infoJsonPath);
 
     if (ctx.data.value("enableGeodeLogging").toBool(false)) {
         QString modPath = ctx.versionPath + "/geode/mods/pcpapc172.gdlauncher-log.geode";
-        if (QFileInfo::exists(modPath)) QFile::remove(modPath);
+        if (QFileInfo::exists(modPath)) {
+            GD_DEBUG_LOG("launch", "Removing deployed Geode log mod");
+            QFile::remove(modPath);
+        }
     }
 
     m_syncing = false;
 
     const AppSettings settings = Settings::load();
+    GD_DEBUG_LOG("launch", QString("Launch/sync cycle finished for '%1'").arg(ctx.instanceName));
     if (settings.closeBehavior == "Close After Game Ends") {
+        GD_DEBUG_LOG("launch", "close_behavior=Close After Game Ends; quitting.");
         qApp->quit();
     } else {
         emit launchComplete();
