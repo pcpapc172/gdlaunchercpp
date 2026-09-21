@@ -1,5 +1,7 @@
 #include "DownloadsDialog.h"
 #include "../Settings.h"
+#include "Theme.h"
+#include "Animations.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGridLayout>
@@ -13,32 +15,47 @@
 #include <QDesktopServices>
 #include <QUrl>
 #include <QDir>
+#include <QStyle>
+#include <QApplication>
+#include <QIcon>
 
 DownloadsDialog::DownloadsDialog(QWidget *parent) : QDialog(parent) {
     setWindowTitle("Downloads");
     resize(1000, 700);
+    setWindowIcon(QIcon(":/icon.png"));
 
     m_versionManager = new VersionManager(this);
 
     auto *root = new QVBoxLayout(this);
+    root->setContentsMargins(UiMetrics::kMargin, UiMetrics::kMargin, UiMetrics::kMargin, UiMetrics::kMargin);
+    root->setSpacing(UiMetrics::kSpacing);
+
+    auto *heading = new QLabel("Downloads", this);
+    heading->setObjectName("heading");
+    root->addWidget(heading);
 
     m_statsWidget = new QWidget(this);
     auto *statsLayout = new QHBoxLayout(m_statsWidget);
+    statsLayout->setContentsMargins(0, 0, 0, 0);
+    statsLayout->setSpacing(UiMetrics::kSpacing);
     root->addWidget(m_statsWidget);
 
     m_searchEdit = new QLineEdit(this);
-    m_searchEdit->setPlaceholderText("🔍 Search versions...");
+    m_searchEdit->setPlaceholderText("Search versions...");
     root->addWidget(m_searchEdit);
 
     auto *scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
     m_listWidget = new QWidget(scroll);
     m_listLayout = new QVBoxLayout(m_listWidget);
+    m_listLayout->setSpacing(UiMetrics::kSpacing);
     m_listLayout->addStretch();
     scroll->setWidget(m_listWidget);
     root->addWidget(scroll, 1);
 
     auto *btnRow = new QHBoxLayout();
+    btnRow->setSpacing(UiMetrics::kSpacing);
     auto *closeBtn = new QPushButton("Close", this);
     btnRow->addStretch();
     btnRow->addWidget(closeBtn);
@@ -51,6 +68,16 @@ DownloadsDialog::DownloadsDialog(QWidget *parent) : QDialog(parent) {
         m_versions = versions;
         renderStats();
         renderList(m_searchEdit->text());
+        m_versionManager->resolveSizes(m_versions);
+    });
+    connect(m_versionManager, &VersionManager::sizeResolved, this, [this](const QString &id, const QString &size) {
+        for (int i = 0; i < m_versions.size(); ++i) {
+            QJsonObject v = m_versions[i].toObject();
+            if (v.value("id").toString() == id) { v["size"] = size; m_versions[i] = v; break; }
+        }
+        QWidget *card = m_cardWidgets.value(id);
+        if (!card) return;
+        if (auto *label = card->findChild<QLabel *>("sizeLabel")) label->setText(size);
     });
     connect(m_versionManager, &VersionManager::downloadProgress, this, [this](const QString &id, qint64 recv, qint64 total) {
         QWidget *card = m_cardWidgets.value(id);
@@ -61,8 +88,8 @@ DownloadsDialog::DownloadsDialog(QWidget *parent) : QDialog(parent) {
         }
     });
     connect(m_versionManager, &VersionManager::downloadFinished, this, [this](const QString &id, bool success, const QString &message) {
+        Q_UNUSED(id);
         if (success) {
-            QMessageBox::information(this, "Download complete", "Download complete!");
             refresh();
         } else {
             QMessageBox::warning(this, "Download failed", message.isEmpty() ? "Download failed" : message);
@@ -71,6 +98,7 @@ DownloadsDialog::DownloadsDialog(QWidget *parent) : QDialog(parent) {
     });
 
     refresh();
+    Animations::fadeIn(this);
 }
 
 void DownloadsDialog::refresh() {
@@ -87,12 +115,14 @@ void DownloadsDialog::renderStats() {
 
     auto addStat = [&](const QString &label, const QString &value) {
         auto *card = new QFrame(m_statsWidget);
-        card->setFrameShape(QFrame::StyledPanel);
+        card->setObjectName("card");
         auto *l = new QVBoxLayout(card);
+        l->setContentsMargins(UiMetrics::kMargin, UiMetrics::kTightSpacing, UiMetrics::kMargin, UiMetrics::kTightSpacing);
+        l->setSpacing(4);
         auto *lab = new QLabel(label, card);
-        lab->setStyleSheet("opacity:0.7; font-size:12px;");
+        lab->setObjectName("subtext");
         auto *val = new QLabel(value, card);
-        val->setStyleSheet("font-size:22px; font-weight:bold;");
+        val->setStyleSheet("font-size:22px; font-weight:700;");
         l->addWidget(lab);
         l->addWidget(val);
         m_statsWidget->layout()->addWidget(card);
@@ -122,36 +152,44 @@ QWidget *DownloadsDialog::buildCard(const QJsonObject &v) {
     const QString id = v.value("id").toString();
     const QString path = v.value("path").toString();
     const bool installed = v.value("isInstalled").toBool();
+    QStyle *style = QApplication::style();
 
     auto *card = new QFrame(m_listWidget);
-    card->setFrameShape(QFrame::StyledPanel);
+    card->setObjectName("card");
     card->setProperty("versionId", id);
     auto *layout = new QVBoxLayout(card);
+    layout->setContentsMargins(UiMetrics::kMargin, UiMetrics::kSpacing, UiMetrics::kMargin, UiMetrics::kSpacing);
+    layout->setSpacing(UiMetrics::kTightSpacing);
 
     auto *headerRow = new QHBoxLayout();
+    headerRow->setSpacing(UiMetrics::kSpacing);
     auto *nameLabel = new QLabel(QString("<b>%1</b><br><span style='opacity:0.6'>%2</span>")
                                       .arg(v.value("name").toString(), path), card);
     headerRow->addWidget(nameLabel);
     headerRow->addStretch();
-    auto *badge = new QLabel(installed ? "✓ Installed" : "Available", card);
-    badge->setStyleSheet(installed ? "color:#2ecc71; font-weight:bold;" : "color:#3498db; font-weight:bold;");
+    auto *badge = new QLabel(installed ? "Installed" : "Available", card);
+    badge->setStyleSheet(installed ? "color:#2ecc71; font-weight:600;" : "color:#3498db; font-weight:600;");
     headerRow->addWidget(badge);
     layout->addLayout(headerRow);
 
-    auto *sizeLabel = new QLabel(QString("💾 %1").arg(v.value("size").toString("Size unknown")), card);
+    auto *sizeLabel = new QLabel(v.value("size").toString("Calculating..."), card);
+    sizeLabel->setObjectName("sizeLabel");
     sizeLabel->setStyleSheet("opacity:0.7; font-size:12px;");
     layout->addWidget(sizeLabel);
 
-    auto *progressBar = new QProgressBar(card);
+    auto *progressBar = new AnimatedProgressBar(card);
     progressBar->setRange(0, 100);
     progressBar->setVisible(false);
     layout->addWidget(progressBar);
 
     auto *actions = new QHBoxLayout();
+    actions->setSpacing(UiMetrics::kTightSpacing);
     if (installed) {
-        auto *repairBtn = new QPushButton("🔧 Repair", card);
-        auto *deleteBtn = new QPushButton("🗑️ Delete", card);
-        auto *folderBtn = new QPushButton("📁", card);
+        auto *repairBtn = new QPushButton(style->standardIcon(QStyle::SP_BrowserReload), "Repair", card);
+        auto *deleteBtn = new QPushButton(style->standardIcon(QStyle::SP_TrashIcon), "Delete", card);
+        deleteBtn->setObjectName("danger");
+        auto *folderBtn = new QPushButton(style->standardIcon(QStyle::SP_DirOpenIcon), QString(), card);
+        folderBtn->setToolTip("Open Folder");
         actions->addWidget(repairBtn);
         actions->addWidget(deleteBtn);
         actions->addWidget(folderBtn);
@@ -163,11 +201,12 @@ QWidget *DownloadsDialog::buildCard(const QJsonObject &v) {
         connect(deleteBtn, &QPushButton::clicked, this, [this, path, id]() { deleteVersion(path, id); });
         connect(folderBtn, &QPushButton::clicked, this, [this, path]() { openVersionFolder(path); });
     } else {
-        auto *downloadBtn = new QPushButton("⬇️ Download", card);
+        auto *downloadBtn = new QPushButton(style->standardIcon(QStyle::SP_ArrowDown), "Download", card);
+        downloadBtn->setObjectName("primary");
         actions->addWidget(downloadBtn);
         connect(downloadBtn, &QPushButton::clicked, this, [this, id, downloadBtn]() {
             downloadBtn->setEnabled(false);
-            downloadBtn->setText("⏳ Downloading...");
+            downloadBtn->setText("Downloading...");
             startDownload(id, false);
         });
     }

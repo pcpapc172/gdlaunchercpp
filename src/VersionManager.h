@@ -38,8 +38,14 @@ public:
     // Async: downloads + extracts a version described by a JSON object {id, path, url, name}
     void downloadVersion(const QJsonObject &version);
 
+    // Async: resolves a human-readable size for each version (local folder size if
+    // installed, remote Content-Length via HTTP HEAD otherwise) and emits sizeResolved
+    // once per entry as it completes, so the UI can update incrementally.
+    void resolveSizes(const QJsonArray &versions);
+
 signals:
     void remoteVersionsReady(const QJsonArray &versions);
+    void sizeResolved(const QString &id, const QString &size);
     void downloadStarted(const QString &id);
     void downloadProgress(const QString &id, qint64 received, qint64 total);
     void downloadFinished(const QString &id, bool success, const QString &message);

@@ -3,6 +3,7 @@
 #include <QFile>
 #include <QJsonDocument>
 #include <QStandardPaths>
+#include <QProcessEnvironment>
 
 QJsonObject AppSettings::toJson() const {
     QJsonObject o;
@@ -25,8 +26,20 @@ AppSettings AppSettings::fromJson(const QJsonObject &obj) {
 }
 
 QString Settings::baseDir() {
-    // Equivalent of Electron's app.getPath('userData') -> <AppData>/GDLauncher
-    return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    // Mirrors the Electron build's app.getPath('userData'), which uses
+    // %AppData%\gd-instance-launcher on Windows (Roaming, no org subfolder) and
+    // ~/.config/gd-instance-launcher on Linux. We use our own product name,
+    // "gdlauncher", instead -- deliberately a separate directory from the
+    // Electron build so the two apps never share or clobber each other's data.
+#if defined(Q_OS_WIN)
+    const QString appData = QProcessEnvironment::systemEnvironment().value("APPDATA");
+    if (!appData.isEmpty()) return appData + "/gdlauncher";
+    return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + "/gdlauncher";
+#elif defined(Q_OS_MACOS)
+    return QDir::homePath() + "/Library/Application Support/gdlauncher";
+#else
+    return QDir::homePath() + "/.config/gdlauncher";
+#endif
 }
 
 QString Settings::instancesDir() { return baseDir() + "/Instances"; }

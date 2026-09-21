@@ -1,5 +1,7 @@
 #include "InstanceDialog.h"
 #include "../VersionManager.h"
+#include "Theme.h"
+#include "Animations.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFormLayout>
@@ -21,15 +23,28 @@
 #include <QEventLoop>
 #include <QUrl>
 #include <QTimer>
+#include <QIcon>
+#include <QStyle>
+#include <QApplication>
 
 InstanceDialog::InstanceDialog(QWidget *parent, bool editMode, const QJsonObject &existingData)
     : QDialog(parent), m_editMode(editMode), m_existing(existingData) {
     setWindowTitle(editMode ? "Edit Instance" : "Create Instance");
-    setMinimumWidth(420);
+    setWindowIcon(QIcon(":/icon.png"));
+    setMinimumWidth(440);
+
+    QStyle *style = QApplication::style();
 
     auto *root = new QVBoxLayout(this);
+    root->setContentsMargins(UiMetrics::kMargin, UiMetrics::kMargin, UiMetrics::kMargin, UiMetrics::kMargin);
+    root->setSpacing(UiMetrics::kSpacing);
+
+    auto *heading = new QLabel(editMode ? "Edit Instance" : "Create Instance", this);
+    heading->setObjectName("heading");
+    root->addWidget(heading);
 
     auto *form = new QFormLayout();
+    form->setSpacing(UiMetrics::kSpacing);
     m_nameEdit = new QLineEdit(this);
     form->addRow("Instance Name:", m_nameEdit);
 
@@ -56,7 +71,7 @@ InstanceDialog::InstanceDialog(QWidget *parent, bool editMode, const QJsonObject
     customLayout->setContentsMargins(0, 0, 0, 0);
     m_exePathEdit = new QLineEdit(this);
     m_exePathEdit->setReadOnly(true);
-    auto *browseBtn = new QPushButton("Browse...", this);
+    auto *browseBtn = new QPushButton(style->standardIcon(QStyle::SP_DialogOpenButton), "Browse...", this);
     customLayout->addWidget(m_exePathEdit);
     customLayout->addWidget(browseBtn);
     form->addRow("Executable Path:", m_customSection);
@@ -66,33 +81,42 @@ InstanceDialog::InstanceDialog(QWidget *parent, bool editMode, const QJsonObject
 
     root->addLayout(form);
 
+    auto *optionsBox = new QWidget(this);
+    auto *optionsLayout = new QVBoxLayout(optionsBox);
+    optionsLayout->setContentsMargins(0, 0, 0, 0);
+    optionsLayout->setSpacing(UiMetrics::kTightSpacing);
     m_geodeCheck = new QCheckBox("Geode Compatible", this);
     m_megahackCheck = new QCheckBox("Use MegaHack / BetterInfo Files", this);
     m_steamEmuCheck = new QCheckBox("Launch via SmartSteamEmu.exe", this);
     m_skipRestartCheck = new QCheckBox("Skip Restart Check (GEODE MIGHT CRASH)", this);
-    for (QCheckBox *c : {m_geodeCheck, m_megahackCheck, m_steamEmuCheck, m_skipRestartCheck}) root->addWidget(c);
+    for (QCheckBox *c : {m_geodeCheck, m_megahackCheck, m_steamEmuCheck, m_skipRestartCheck}) optionsLayout->addWidget(c);
+    root->addWidget(optionsBox);
 
     m_geodeLogSection = new QWidget(this);
     auto *geodeLogLayout = new QVBoxLayout(m_geodeLogSection);
-    geodeLogLayout->setContentsMargins(0, 8, 0, 0);
+    geodeLogLayout->setContentsMargins(0, UiMetrics::kTightSpacing, 0, 0);
+    geodeLogLayout->setSpacing(UiMetrics::kTightSpacing);
     m_geodeLogCheck = new QCheckBox("Enable Advanced Logging (Geode)", this);
     geodeLogLayout->addWidget(m_geodeLogCheck);
     m_geodeLogVersionSection = new QWidget(this);
     auto *verLayout = new QVBoxLayout(m_geodeLogVersionSection);
-    verLayout->setContentsMargins(0, 4, 0, 0);
+    verLayout->setContentsMargins(0, UiMetrics::kTightSpacing, 0, 0);
+    verLayout->setSpacing(UiMetrics::kTightSpacing);
     verLayout->addWidget(new QLabel("Mod Version:", this));
     m_geodeLogVersionCombo = new QComboBox(this);
     verLayout->addWidget(m_geodeLogVersionCombo);
     geodeLogLayout->addWidget(m_geodeLogVersionSection);
     root->addWidget(m_geodeLogSection);
 
-    m_openInEditorBtn = new QPushButton("Edit Save File in Editor", this);
+    m_openInEditorBtn = new QPushButton(style->standardIcon(QStyle::SP_FileDialogContentsView), "Edit Save File in Editor", this);
     m_openInEditorBtn->setVisible(editMode);
     root->addWidget(m_openInEditorBtn);
 
     auto *btnRow = new QHBoxLayout();
+    btnRow->setSpacing(UiMetrics::kTightSpacing);
     auto *cancelBtn = new QPushButton("Cancel", this);
     auto *saveBtn = new QPushButton("Save", this);
+    saveBtn->setObjectName("primary");
     btnRow->addStretch();
     btnRow->addWidget(cancelBtn);
     btnRow->addWidget(saveBtn);
@@ -135,6 +159,8 @@ InstanceDialog::InstanceDialog(QWidget *parent, bool editMode, const QJsonObject
 
     updateVersionTypeUI();
     updateGeodeLogUI();
+
+    Animations::fadeIn(this);
 }
 
 void InstanceDialog::populateVersions() {

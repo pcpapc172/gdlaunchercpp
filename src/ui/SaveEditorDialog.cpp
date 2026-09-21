@@ -1,6 +1,8 @@
 #include "SaveEditorDialog.h"
 #include "../InstanceManager.h"
 #include "../Settings.h"
+#include "Theme.h"
+#include "Animations.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QComboBox>
@@ -15,6 +17,9 @@
 #include <QInputDialog>
 #include <QPlainTextEdit>
 #include <QDialogButtonBox>
+#include <QIcon>
+#include <QStyle>
+#include <QApplication>
 
 namespace {
 const QStringList kOfficialSongs = {
@@ -35,9 +40,17 @@ const QStringList kOfficialSongs = {
 
 SaveEditorDialog::SaveEditorDialog(QWidget *parent) : QDialog(parent) {
     setWindowTitle("Save File Editor");
+    setWindowIcon(QIcon(":/icon.png"));
     resize(900, 650);
+    QStyle *style = QApplication::style();
 
     auto *root = new QVBoxLayout(this);
+    root->setContentsMargins(UiMetrics::kMargin, UiMetrics::kMargin, UiMetrics::kMargin, UiMetrics::kMargin);
+    root->setSpacing(UiMetrics::kSpacing);
+
+    auto *heading = new QLabel("Save File Editor", this);
+    heading->setObjectName("heading");
+    root->addWidget(heading);
 
     auto *instanceRow = new QHBoxLayout();
     instanceRow->addWidget(new QLabel("Select Instance:", this));
@@ -105,7 +118,7 @@ SaveEditorDialog::SaveEditorDialog(QWidget *parent) : QDialog(parent) {
     exportRow->addWidget(exportGmdBtn);
     panelLayout->addLayout(exportRow);
 
-    auto *importReplaceBtn = new QPushButton("Import (Replace)", this);
+    auto *importReplaceBtn = new QPushButton(style->standardIcon(QStyle::SP_BrowserReload), "Import (Replace)", this);
     panelLayout->addWidget(importReplaceBtn);
     panelLayout->addStretch();
 
@@ -114,11 +127,15 @@ SaveEditorDialog::SaveEditorDialog(QWidget *parent) : QDialog(parent) {
     root->addLayout(split);
 
     auto *bottomRow = new QHBoxLayout();
-    auto *importNewBtn = new QPushButton("Import New", this);
-    auto *editRawBtn = new QPushButton("Edit Raw XML", this);
+    bottomRow->setSpacing(UiMetrics::kTightSpacing);
+    auto *importNewBtn = new QPushButton(style->standardIcon(QStyle::SP_FileDialogNewFolder), "Import New", this);
+    auto *editRawBtn = new QPushButton(style->standardIcon(QStyle::SP_FileDialogDetailedView), "Edit Raw XML", this);
     auto *saveBtn = new QPushButton("Save", this);
+    saveBtn->setObjectName("primary");
     auto *saveExitBtn = new QPushButton("Save & Exit", this);
+    saveExitBtn->setObjectName("primary");
     auto *exitBtn = new QPushButton("Exit without Saving", this);
+    exitBtn->setObjectName("danger");
     bottomRow->addWidget(importNewBtn);
     bottomRow->addWidget(editRawBtn);
     bottomRow->addStretch();
@@ -146,6 +163,8 @@ SaveEditorDialog::SaveEditorDialog(QWidget *parent) : QDialog(parent) {
     connect(exitBtn, &QPushButton::clicked, this, &QDialog::reject);
 
     if (m_instanceCombo->count() > 0) onInstanceChanged();
+
+    Animations::fadeIn(this);
 }
 
 void SaveEditorDialog::selectInstance(const QString &name) {

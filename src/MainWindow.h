@@ -7,7 +7,7 @@
 class QTableWidget;
 class QPushButton;
 class QLabel;
-class QProgressBar;
+class AnimatedProgressBar;
 class GameLauncher;
 class UpdateChecker;
 class ConsoleWindow;
@@ -41,7 +41,7 @@ private:
     QPushButton *m_downloadBtn;
     QPushButton *m_editorBtn;
     QPushButton *m_settingsBtn;
-    QProgressBar *m_progressBar;
+    AnimatedProgressBar *m_progressBar;
     QLabel *m_statusLabel;
 
     GameLauncher *m_launcher;
@@ -58,4 +58,5 @@ private:
     void setUiEnabled(bool enabled);
     void appendLog(const QString &line);
     QString selectedInstanceName() const;
+    void runStartupChecks();
 };

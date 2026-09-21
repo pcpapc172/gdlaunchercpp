@@ -41,6 +41,10 @@ set(APP_SOURCES
     src/ui/SettingsDialog.cpp
     src/ui/DownloadsDialog.cpp
     src/ui/SaveEditorDialog.cpp
+    src/ui/Theme.cpp
+    src/ui/Animations.cpp
+    src/ui/WelcomeDialog.cpp
+    src/ui/ChangelogDialog.cpp
 )
 
 set(APP_HEADERS
@@ -59,6 +63,10 @@ set(APP_HEADERS
     src/ui/SettingsDialog.h
     src/ui/DownloadsDialog.h
     src/ui/SaveEditorDialog.h
+    src/ui/Theme.h
+    src/ui/Animations.h
+    src/ui/WelcomeDialog.h
+    src/ui/ChangelogDialog.h
 )
 
 qt_add_executable(gdlauncher ${APP_SOURCES} ${APP_HEADERS} resources/resources.qrc)

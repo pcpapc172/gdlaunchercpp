@@ -6,9 +6,11 @@
 #include <QPushButton>
 #include <QApplication>
 #include <QClipboard>
+#include <QIcon>
 
 ConsoleWindow::ConsoleWindow(QWidget *parent) : QWidget(parent) {
     setWindowTitle("Game Log Console");
+    setWindowIcon(QIcon(":/icon.png"));
     resize(860, 520);
     setStyleSheet("background:#0d0d0d; color:#00e676;");
 

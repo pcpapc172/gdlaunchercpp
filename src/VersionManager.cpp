@@ -99,16 +99,62 @@ void VersionManager::fetchRemoteVersions() {
             if (err.error == QJsonParseError::NoError && doc.isArray()) {
                 for (const QJsonValue &v : doc.array()) {
                     QJsonObject o = v.toObject();
-                    const QString path = o.value("path").toString();
-                    const bool installed = QFileInfo::exists(Settings::versionsDir() + "/" + path);
+                    // The remote manifest only carries id/category/version/name/url (no
+                    // "path"); the on-disk layout is always <category>/<version>, so derive
+                    // it rather than trusting a "path" field that doesn't exist. Using a
+                    // missing field previously meant every entry resolved to the Versions
+                    // root directory (which always exists) and showed as installed.
+                    const QString category = o.value("category").toString();
+                    const QString version = o.value("version").toString();
+                    QString path = o.value("path").toString();
+                    if (path.isEmpty()) path = category + "/" + version;
+                    o["path"] = path;
+                    o["id"] = path;
+
+                    const bool installed = !path.isEmpty() && QFileInfo::exists(Settings::versionsDir() + "/" + path);
                     o["isInstalled"] = installed;
-                    o["size"] = "Calculating...";
+                    o["size"] = installed ? QString() : QString("Unknown");
                     result.push_back(o);
                 }
             }
         }
         emit remoteVersionsReady(result);
     });
+}
+
+static QString formatBytes(qint64 bytes) {
+    double b = static_cast<double>(bytes);
+    static const char *units[] = {"B", "KB", "MB", "GB"};
+    int i = 0;
+    while (b >= 1024.0 && i < 3) { b /= 1024.0; i++; }
+    return QString::number(b, 'f', 2) + " " + units[i];
+}
+
+void VersionManager::resolveSizes(const QJsonArray &versions) {
+    for (const QJsonValue &vv : versions) {
+        const QJsonObject v = vv.toObject();
+        const QString id = v.value("id").toString();
+        const QString path = v.value("path").toString();
+
+        if (v.value("isInstalled").toBool()) {
+            const qint64 bytes = getVersionSize(path);
+            emit sizeResolved(id, formatBytes(bytes));
+            continue;
+        }
+
+        const QString url = v.value("url").toString();
+        if (url.isEmpty()) { emit sizeResolved(id, "Unknown"); continue; }
+
+        QNetworkRequest req{QUrl(url)};
+        QNetworkReply *reply = m_net.head(req);
+        connect(reply, &QNetworkReply::finished, this, [this, reply, id]() {
+            reply->deleteLater();
+            if (reply->error() != QNetworkReply::NoError) { emit sizeResolved(id, "Unknown"); return; }
+            const QVariant lenHeader = reply->header(QNetworkRequest::ContentLengthHeader);
+            if (!lenHeader.isValid()) { emit sizeResolved(id, "Unknown"); return; }
+            emit sizeResolved(id, formatBytes(lenHeader.toLongLong()));
+        });
+    }
 }
 
 static bool extractZip(const QString &zipPath, const QString &destDir, QString *error) {
