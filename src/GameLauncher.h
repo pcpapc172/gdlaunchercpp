@@ -52,6 +52,11 @@ private:
         int syncDelay = 5000;
         bool enableLogOutput = false;
         QString processName;
+        // The real Geometry Dash executable's filename. Usually equal to exePath's filename,
+        // except when useSteamEmu is on: exePath is then the emulator we actually spawn, but
+        // restart-detection/monitoring still needs to watch for the game process itself
+        // (SmartSteamEmu is expected to launch it, not stay resident under its own name).
+        QString gameProcessName;
     };
 
     QString linuxAppDataPath(const QString &saveFolderName) const;

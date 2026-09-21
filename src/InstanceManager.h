@@ -45,4 +45,9 @@ private:
     static void copyDirWithProgress(const QString &src, const QString &dest, const QString &instanceRoot,
                                      int &counter, const FileProgressCb &onFileProgress);
     static void copyDir(const QString &src, const QString &dest);
+    // Builds the full instance.json contents from an InstanceDialog-shaped QJsonObject. Shared
+    // by createInstance/editInstance so the two can never again drift into writing different
+    // field sets (createInstance used to silently drop useSteamEmu, skipRestartCheck,
+    // executablePath, and the Geode-logging fields entirely).
+    static QJsonObject buildInstanceJson(const QJsonObject &data, const QString &name, const QString &creationDate);
 };

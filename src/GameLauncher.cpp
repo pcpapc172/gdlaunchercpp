@@ -233,21 +233,37 @@ void GameLauncher::launchInstance(const QString &instanceName) {
 
     if (!isCustomExe) {
         QString executable = "GeometryDash.exe";
+        QString steamEmulator = "SmartSteamEmu.exe";
         const QString versionJsonPath = ctx.versionPath + "/version.json";
         if (QFileInfo::exists(versionJsonPath)) {
             QFile vf(versionJsonPath);
             vf.open(QIODevice::ReadOnly);
             const QJsonObject vc = QJsonDocument::fromJson(vf.readAll()).object();
             if (vc.contains("executable")) executable = vc.value("executable").toString();
+            if (vc.contains("steam_emulator")) steamEmulator = vc.value("steam_emulator").toString();
         }
-        ctx.exePath = ctx.versionPath + "/" + executable;
+
+        ctx.gameProcessName = executable;
+
+        // "Launch via SmartSteamEmu.exe" means launch that emulator executable INSTEAD of the
+        // game exe directly -- it's the emulator's job to start the real game itself with the
+        // Steamworks API faked out. This was saved to instance.json but never actually
+        // consulted anywhere in launch, so the checkbox did nothing.
+        if (data.value("useSteamEmu").toBool(false)) {
+            ctx.exePath = ctx.versionPath + "/" + steamEmulator;
+            GD_DEBUG_LOG("launch", QString("useSteamEmu is on; launching emulator instead of the game exe directly: %1").arg(steamEmulator));
+        } else {
+            ctx.exePath = ctx.versionPath + "/" + executable;
+        }
     }
 
     GD_DEBUG_LOG("launch", QString("Resolved executable: %1").arg(ctx.exePath));
     if (!QFileInfo::exists(ctx.exePath)) {
         GD_DEBUG_LOG("launch", "Executable does not exist");
         emit launchComplete();
-        emit statusUpdate("Game executable not found");
+        emit statusUpdate(data.value("useSteamEmu").toBool(false) && !isCustomExe
+            ? QString("Steam emulator executable not found: %1").arg(QFileInfo(ctx.exePath).fileName())
+            : "Game executable not found");
         return;
     }
 
@@ -302,7 +318,7 @@ void GameLauncher::launchInstance(const QString &instanceName) {
     const AppSettings settings = Settings::load();
     ctx.syncDelay = qMax(0, settings.syncDelay) * 1000;
     ctx.enableLogOutput = settings.enableLogOutput;
-    ctx.processName = QFileInfo(ctx.exePath).fileName();
+    ctx.processName = !ctx.gameProcessName.isEmpty() ? ctx.gameProcessName : QFileInfo(ctx.exePath).fileName();
 
     deployGeodeLogModIfNeeded(ctx);
 

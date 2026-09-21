@@ -121,6 +121,24 @@ void InstanceManager::ensureInstanceIntegrity(const QString &instancePath, bool 
     }
 }
 
+QJsonObject InstanceManager::buildInstanceJson(const QJsonObject &data, const QString &name, const QString &creationDate) {
+    QJsonObject instanceData;
+    instanceData["name"] = name;
+    instanceData["versionType"] = data.value("versionType").toString("remote");
+    instanceData["version"] = data.value("version").toString("2.2/2.207");
+    instanceData["versionPath"] = data.value("versionPath").toString("");
+    instanceData["saveFolderName"] = data.value("saveFolderName").toString("GeometryDash");
+    instanceData["isGeodeCompatible"] = data.contains("isGeodeCompatible") ? data.value("isGeodeCompatible") : QJsonValue(true);
+    instanceData["useMegaHack"] = data.contains("useMegaHack") ? data.value("useMegaHack") : QJsonValue(true);
+    instanceData["useSteamEmu"] = data.value("useSteamEmu").toBool(false);
+    instanceData["skipRestartCheck"] = data.value("skipRestartCheck").toBool(false);
+    instanceData["enableGeodeLogging"] = data.value("enableGeodeLogging").toBool(false);
+    instanceData["geodeLogModVersion"] = data.value("geodeLogModVersion").toString("");
+    instanceData["executablePath"] = data.value("executablePath");
+    instanceData["creationDate"] = creationDate;
+    return instanceData;
+}
+
 InstanceSaveResult InstanceManager::createInstance(const QJsonObject &data) {
     InstanceSaveResult res;
     const QString name = data.value("name").toString();
@@ -131,15 +149,7 @@ InstanceSaveResult InstanceManager::createInstance(const QJsonObject &data) {
 
     QDir().mkpath(instancePath);
 
-    QJsonObject instanceData;
-    instanceData["name"] = name;
-    instanceData["versionType"] = data.value("versionType").toString("remote");
-    instanceData["version"] = data.value("version").toString("2.2/2.207");
-    instanceData["versionPath"] = data.value("versionPath").toString("");
-    instanceData["saveFolderName"] = data.value("saveFolderName").toString("GeometryDash");
-    instanceData["isGeodeCompatible"] = data.contains("isGeodeCompatible") ? data.value("isGeodeCompatible") : QJsonValue(true);
-    instanceData["useMegaHack"] = data.contains("useMegaHack") ? data.value("useMegaHack") : QJsonValue(true);
-    instanceData["creationDate"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
+    const QJsonObject instanceData = buildInstanceJson(data, name, QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
 
     QFile f(instanceJsonPath(instancePath));
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) { res.error = "Failed to write instance.json"; return res; }
@@ -163,20 +173,7 @@ InstanceSaveResult InstanceManager::editInstance(const QString &originalName, co
         if (!QDir().rename(oldPath, newPath)) { res.error = "Failed to rename instance folder"; return res; }
     }
 
-    QJsonObject instanceData;
-    instanceData["name"] = newName;
-    instanceData["versionType"] = data.value("versionType");
-    instanceData["version"] = data.value("version");
-    instanceData["versionPath"] = data.value("versionPath").toString("");
-    instanceData["saveFolderName"] = data.value("saveFolderName");
-    instanceData["isGeodeCompatible"] = data.value("isGeodeCompatible");
-    instanceData["useMegaHack"] = data.value("useMegaHack");
-    instanceData["useSteamEmu"] = data.value("useSteamEmu").toBool(false);
-    instanceData["skipRestartCheck"] = data.value("skipRestartCheck").toBool(false);
-    instanceData["enableGeodeLogging"] = data.value("enableGeodeLogging").toBool(false);
-    instanceData["geodeLogModVersion"] = data.value("geodeLogModVersion").toString("");
-    instanceData["executablePath"] = data.value("executablePath");
-    instanceData["creationDate"] = data.value("creationDate");
+    const QJsonObject instanceData = buildInstanceJson(data, newName, data.value("creationDate").toString());
 
     QFile f(instanceJsonPath(newPath));
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) { res.error = "Failed to write instance.json"; return res; }
