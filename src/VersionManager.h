@@ -21,6 +21,10 @@ struct LocalVersion {
 struct VersionDefaults {
     QString executable = "GeometryDash.exe";
     QString steamEmulator = "SmartSteamEmu.exe";
+    bool geodeCompatible = false;
+    bool useMegaHack = true;
+    bool useSteamEmu = false;
+    bool skipRestartCheck = false;
 };
 
 // A version download/extraction in flight, keyed by version id. VersionManager is owned by

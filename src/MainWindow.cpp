@@ -15,6 +15,7 @@
 #include "DebugLog.h"
 
 #include <QWidget>
+#include <QCloseEvent>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QTableWidget>
@@ -222,6 +223,17 @@ void MainWindow::runStartupChecks() {
     }
 }
 
+void MainWindow::closeEvent(QCloseEvent *event) {
+    // ConsoleWindow is a separate top-level widget with no parent (so it can be shown/hidden
+    // independently), so closing the main window alone leaves it open -- and since it's still a
+    // visible top-level window, Qt's quitOnLastWindowClosed never fires and the process lingers.
+    if (m_consoleWindow) {
+        GD_DEBUG_LOG("ui", "Main window closing; closing the log console with it.");
+        m_consoleWindow->close();
+    }
+    QMainWindow::closeEvent(event);
+}
+
 void MainWindow::appendLog(const QString &line) {
     m_logBuffer.push_back(line);
     if (m_logBuffer.size() > 2000) m_logBuffer.removeFirst();
@@ -286,8 +298,11 @@ void MainWindow::onLaunch() {
 }
 
 void MainWindow::onCreate() {
+    GD_DEBUG_LOG("ui", "Create button clicked; opening Create Instance dialog");
     InstanceDialog dlg(this, false);
-    if (dlg.exec() != QDialog::Accepted) return;
+    const int result = dlg.exec();
+    GD_DEBUG_LOG("ui", QString("Create Instance dialog closed (%1)").arg(result == QDialog::Accepted ? "Save" : "Cancel"));
+    if (result != QDialog::Accepted) return;
     const InstanceSaveResult res = InstanceManager::createInstance(dlg.data());
     GD_DEBUG_LOG("instances", QString("Create '%1': success=%2%3")
         .arg(dlg.data().value("name").toString(), res.success ? "yes" : "no",
@@ -306,16 +321,21 @@ void MainWindow::onEdit() {
     for (const auto &i : m_instances) if (i.name == m_selectedInstance) { inst = &i; break; }
     if (!inst) return;
 
+    GD_DEBUG_LOG("ui", QString("Edit button clicked for '%1'; opening Edit Instance dialog").arg(m_selectedInstance));
     InstanceDialog dlg(this, true, inst->data);
     QString originalName = m_selectedInstance;
     connect(&dlg, &InstanceDialog::openInEditorRequested, this, [this, originalName]() {
+        GD_DEBUG_LOG("ui", QString("'Edit Save File in Editor' clicked for '%1'; opening Save Editor").arg(originalName));
         QTimer::singleShot(0, this, [this, originalName]() {
             SaveEditorDialog editor(this);
             editor.selectInstance(originalName);
             editor.exec();
+            GD_DEBUG_LOG("ui", "Save Editor closed");
         });
     });
-    if (dlg.exec() != QDialog::Accepted) return;
+    const int result = dlg.exec();
+    GD_DEBUG_LOG("ui", QString("Edit Instance dialog closed (%1)").arg(result == QDialog::Accepted ? "Save" : "Cancel"));
+    if (result != QDialog::Accepted) return;
     const InstanceSaveResult res = InstanceManager::editInstance(originalName, dlg.data());
     if (res.success) {
         m_selectedInstance = dlg.data().value("name").toString();
@@ -327,9 +347,12 @@ void MainWindow::onEdit() {
 
 void MainWindow::onDelete() {
     if (m_selectedInstance.isEmpty()) return;
+    GD_DEBUG_LOG("ui", QString("Delete button clicked for '%1'").arg(m_selectedInstance));
     if (QMessageBox::question(this, "Delete instance",
-            QString("Are you sure you want to move '%1' to Trash?").arg(m_selectedInstance)) != QMessageBox::Yes)
+            QString("Are you sure you want to move '%1' to Trash?").arg(m_selectedInstance)) != QMessageBox::Yes) {
+        GD_DEBUG_LOG("ui", "Delete cancelled by user");
         return;
+    }
     GD_DEBUG_LOG("instances", QString("Deleting instance '%1'").arg(m_selectedInstance));
     const InstanceSaveResult res = InstanceManager::deleteInstance(m_selectedInstance);
     if (res.success) {
@@ -341,25 +364,39 @@ void MainWindow::onDelete() {
 }
 
 void MainWindow::onSettings() {
+    GD_DEBUG_LOG("ui", "Settings button clicked; opening Settings dialog");
     SettingsDialog dlg(this, m_settings, m_appVersion);
-    connect(&dlg, &SettingsDialog::checkUpdatesRequested, this, [this]() { m_updateChecker->check(true); });
+    connect(&dlg, &SettingsDialog::checkUpdatesRequested, this, [this]() {
+        GD_DEBUG_LOG("ui", "'Check for Updates' clicked");
+        m_updateChecker->check(true);
+    });
     connect(&dlg, &SettingsDialog::openDataFolderRequested, this, []() {
+        GD_DEBUG_LOG("ui", "'Open Data Folder' clicked");
         QDesktopServices::openUrl(QUrl::fromLocalFile(Settings::baseDir()));
     });
-    if (dlg.exec() == QDialog::Accepted) {
+    const int result = dlg.exec();
+    GD_DEBUG_LOG("ui", QString("Settings dialog closed (%1)").arg(result == QDialog::Accepted ? "Save and Close" : "dismissed"));
+    if (result == QDialog::Accepted) {
         m_settings = dlg.resultSettings();
         Settings::save(m_settings);
         Theme::apply(Theme::fromSettingsString(m_settings.theme));
+        GD_DEBUG_LOG("ui", QString("Settings saved: theme=%1 close_behavior=%2 sync_delay=%3 log_output=%4")
+            .arg(m_settings.theme, m_settings.closeBehavior).arg(m_settings.syncDelay)
+            .arg(m_settings.enableLogOutput ? "on" : "off"));
     }
 }
 
 void MainWindow::onDownloads() {
+    GD_DEBUG_LOG("ui", "Downloads button clicked; opening Downloads dialog");
     DownloadsDialog dlg(this, m_versionManager);
     dlg.exec();
+    GD_DEBUG_LOG("ui", "Downloads dialog closed");
     refreshInstances();
 }
 
 void MainWindow::onEditor() {
+    GD_DEBUG_LOG("ui", "Save Editor button clicked; opening Save Editor dialog");
     SaveEditorDialog dlg(this);
     dlg.exec();
+    GD_DEBUG_LOG("ui", "Save Editor dialog closed");
 }

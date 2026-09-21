@@ -69,6 +69,11 @@ qint64 VersionManager::getVersionSize(const QString &versionPath) {
 
 VersionDefaults VersionManager::getVersionDefaults(const QString &versionPath) {
     VersionDefaults d;
+    // A version whose id/path mentions "geode" is Geode-patched by definition, so that's a
+    // sensible fallback for versions.json entries or on-disk version.json files predating the
+    // geode_compatible field -- better than silently defaulting to false for every one of them.
+    d.geodeCompatible = versionPath.contains("geode", Qt::CaseInsensitive);
+
     QFile f(Settings::versionsDir() + "/" + versionPath + "/version.json");
     if (f.open(QIODevice::ReadOnly)) {
         QJsonParseError err;
@@ -77,6 +82,10 @@ VersionDefaults VersionManager::getVersionDefaults(const QString &versionPath) {
             const QJsonObject o = doc.object();
             if (o.contains("executable")) d.executable = o["executable"].toString();
             if (o.contains("steam_emulator")) d.steamEmulator = o["steam_emulator"].toString();
+            if (o.contains("geode_compatible")) d.geodeCompatible = o["geode_compatible"].toBool();
+            if (o.contains("use_megahack")) d.useMegaHack = o["use_megahack"].toBool();
+            if (o.contains("use_steam_emu")) d.useSteamEmu = o["use_steam_emu"].toBool();
+            if (o.contains("skip_restart_check")) d.skipRestartCheck = o["skip_restart_check"].toBool();
         }
     }
     return d;
@@ -360,6 +369,13 @@ void VersionManager::downloadVersion(const QJsonObject &version) {
                     QJsonObject defaults;
                     defaults["executable"] = "GeometryDash.exe";
                     defaults["steam_emulator"] = "SmartSteamEmu.exe";
+                    // Best-effort guess from the version id (e.g. "2.2/2.207-geode") so a
+                    // freshly downloaded version pre-checks sensible instance options; the
+                    // user can still change any of them per-instance.
+                    defaults["geode_compatible"] = id.contains("geode", Qt::CaseInsensitive);
+                    defaults["use_megahack"] = true;
+                    defaults["use_steam_emu"] = false;
+                    defaults["skip_restart_check"] = false;
                     vf.write(QJsonDocument(defaults).toJson(QJsonDocument::Indented));
                 }
             }

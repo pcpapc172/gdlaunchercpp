@@ -246,8 +246,6 @@ void InstanceDialog::fetchLogModVersions() {
 }
 
 void InstanceDialog::onLocalVersionChanged() {
-    // In the original, version.json defaults only auto-fill when creating, not editing.
-    if (m_editMode) return;
     loadVersionDefaults();
 }
 
@@ -255,12 +253,19 @@ void InstanceDialog::loadVersionDefaults() {
     const QString selected = m_localVersionCombo->currentData().toString();
     if (selected.isEmpty()) return;
     const VersionDefaults defaults = VersionManager::getVersionDefaults(selected);
+
     if (!defaults.executable.isEmpty()) {
         QString folderName = defaults.executable;
         const int dot = folderName.lastIndexOf('.');
         if (dot > 0) folderName = folderName.left(dot);
         m_saveFolderEdit->setText(folderName);
     }
+
+    m_geodeCheck->setChecked(defaults.geodeCompatible);
+    m_megahackCheck->setChecked(defaults.useMegaHack);
+    m_steamEmuCheck->setChecked(defaults.useSteamEmu);
+    m_skipRestartCheck->setChecked(defaults.skipRestartCheck);
+    updateGeodeLogUI();
 }
 
 void InstanceDialog::onSave() {

@@ -15,12 +15,16 @@ class ConsoleWindow;
 class LogPipeServer;
 class QPlainTextEdit;
 class QDialog;
+class QCloseEvent;
 
 // Port of index.html + renderer.js's main window.
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
     explicit MainWindow(QWidget *parent = nullptr);
+
+protected:
+    void closeEvent(QCloseEvent *event) override;
 
 private slots:
     void refreshInstances();

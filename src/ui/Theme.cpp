@@ -115,13 +115,9 @@ QString Theme::styleSheet(Kind kind) {
             background-color: %9;
             border-color: %9;
         }
-        QRadioButton::indicator {
-            border-radius: 8px;
-        }
-        QRadioButton::indicator:checked {
-            border: 4px solid %9;
-            background-color: %11;
-        }
+        QCheckBox::indicator:checked { image: url(:/check.png); }
+        QRadioButton::indicator { border-radius: 8px; }
+        QRadioButton::indicator:checked { image: url(:/radio_dot.png); }
 
         QGroupBox {
             border: 1px solid %5;
