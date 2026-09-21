@@ -64,7 +64,14 @@ jobs:
         shell: cmd
 
       - name: Copy zlib runtime
-        run: Copy-Item C:\vcpkg\installed\x64-windows\bin\zlib1.dll build\Release\
+        run: |
+          $dll = Get-ChildItem -Path C:\vcpkg\installed -Recurse -Filter 'zlib*.dll' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($dll) {
+            Copy-Item $dll.FullName build\Release\
+            Write-Host "Copied $($dll.FullName)"
+          } else {
+            Write-Host "No zlib DLL found; assuming it was linked statically."
+          }
         shell: pwsh
 
       - name: Upload artifact
