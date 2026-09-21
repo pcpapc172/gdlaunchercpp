@@ -1,0 +1,136 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qt6-base-dev zlib1g-dev build-essential cmake ninja-build rpm
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Strip binary
+        run: strip build/gdlauncher
+
+      - name: Package (tarball)
+        run: |
+          mkdir -p dist
+          tar -C build -czf dist/gdlauncher-linux-x86_64.tar.gz gdlauncher
+
+      - name: Package (.deb / .rpm)
+        working-directory: build
+        run: |
+          cpack -G "DEB;RPM"
+          mv gdlauncher-*-amd64.deb ../dist/
+          mv gdlauncher-*.x86_64.rpm ../dist/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux
+          path: dist/*
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.*'
+          arch: 'win64_msvc2019_64'
+
+      - name: Install zlib (vcpkg)
+        run: |
+          git clone https://github.com/microsoft/vcpkg C:\vcpkg
+          C:\vcpkg\bootstrap-vcpkg.bat
+          C:\vcpkg\vcpkg.exe install zlib:x64-windows
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows
+
+      - name: Build
+        run: cmake --build build --config Release -j
+
+      - name: Deploy Qt runtime
+        run: windeployqt --release build\Release\gdlauncher.exe
+        shell: cmd
+
+      - name: Copy zlib runtime
+        run: |
+          $dll = Get-ChildItem -Path C:\vcpkg\installed -Recurse -Filter 'zlib*.dll' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($dll) {
+            Copy-Item $dll.FullName build\Release\
+            Write-Host "Copied $($dll.FullName)"
+          } else {
+            Write-Host "No zlib DLL found; assuming it was linked statically."
+          }
+        shell: pwsh
+
+      - name: Package (zip)
+        run: |
+          mkdir dist
+          Compress-Archive -Path build\Release\* -DestinationPath dist\gdlauncher-windows-x86_64.zip
+        shell: pwsh
+
+      # windows-latest images ship NSIS and WiX Toolset v3 already, but install explicitly
+      # rather than assume -- a missing toolset should fail loudly, not silently skip a
+      # package.
+      - name: Install NSIS + WiX Toolset
+        run: choco install nsis wixtoolset -y --no-progress
+        shell: cmd
+
+      - name: Package (NSIS .exe / WiX .msi)
+        working-directory: build
+        run: |
+          $env:PATH += ";C:\Program Files (x86)\WiX Toolset v3.11\bin"
+          # CPACK_INSTALLED_DIRECTORIES packages this directory's contents verbatim into bin/,
+          # since the exe alone (via install(TARGETS)) is missing the Qt/zlib DLLs that
+          # windeployqt just deployed alongside it above -- those aren't part of any CMake
+          # install() rule.
+          cpack -D "CPACK_INSTALLED_DIRECTORIES=$pwd\Release;bin" -G "NSIS;WIX"
+          Get-ChildItem *.exe | Rename-Item -NewName "gdlauncher-windows-x86_64-installer.exe"
+          Get-ChildItem *.msi | Rename-Item -NewName "gdlauncher-windows-x86_64.msi"
+          Move-Item gdlauncher-windows-x86_64-installer.exe, gdlauncher-windows-x86_64.msi ..\dist\
+        shell: pwsh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: [linux, windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: GDLauncher ${{ github.ref_name }}
+          generate_release_notes: true
+          files: dist/*

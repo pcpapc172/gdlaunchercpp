@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=GDLauncher
+Comment=Game Instance Launcher for Geometry Dash
+Exec=gdlauncher
+Icon=gdlauncher
+Categories=Game;
+Terminal=false

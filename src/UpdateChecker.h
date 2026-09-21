@@ -4,7 +4,9 @@
 #include <QWidget>
 #include <QNetworkAccessManager>
 
-// Port of checkForUpdates/installRpm/isFedora/isRpmOstree from main.js.
+// Checks the gdlaunchercpp GitHub releases for a newer version, downloads the matching
+// platform archive, and extracts it for the user to install manually (we publish plain
+// zip/tar.gz builds, not installers).
 class UpdateChecker : public QObject {
     Q_OBJECT
 public:
@@ -23,9 +25,6 @@ private:
     QNetworkAccessManager m_net;
 
     static bool isLinux();
-    static bool isFedora();
-    static bool isRpmOstree();
-    static bool installRpm(const QString &rpmPath);
     // Very small semver-ish compare: returns true if a > b.
     static bool versionGreater(const QString &a, const QString &b);
 };

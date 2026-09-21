@@ -71,7 +71,9 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     m_table = new QTableWidget(0, 3, this);
     m_table->setObjectName("panel");
     m_table->setHorizontalHeaderLabels({"Name", "Save Size", "Version"});
-    m_table->horizontalHeader()->setStretchLastSection(true);
+    // Give all three columns equal width instead of Name/Size auto-fitting to their tiny
+    // content and Version (the only usually-long column) eating the rest via stretch-last.
+    m_table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     m_table->verticalHeader()->setVisible(false);
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->setSelectionMode(QAbstractItemView::SingleSelection);

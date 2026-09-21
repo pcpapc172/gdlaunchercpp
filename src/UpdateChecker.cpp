@@ -1,4 +1,5 @@
 #include "UpdateChecker.h"
+#include "DebugLog.h"
 #include <QNetworkRequest>
 #include <QNetworkReply>
 #include <QJsonDocument>
@@ -6,12 +7,22 @@
 #include <QJsonArray>
 #include <QMessageBox>
 #include <QFile>
+#include <QDir>
+#include <QFileInfo>
 #include <QStandardPaths>
 #include <QProcess>
 #include <QDesktopServices>
 #include <QUrl>
 #include <QCoreApplication>
 #include <QStringList>
+
+#ifdef Q_OS_WIN
+extern "C" {
+#include "miniz.h"
+}
+#endif
+
+static const char *kUpdateRepo = "pcpapc172/gdlaunchercpp";
 
 UpdateChecker::UpdateChecker(QWidget *dialogParent, QObject *parent)
     : QObject(parent), m_dialogParent(dialogParent) {}
@@ -24,29 +35,6 @@ bool UpdateChecker::isLinux() {
 #endif
 }
 
-bool UpdateChecker::isFedora() {
-    if (!isLinux()) return false;
-    QFile f("/etc/os-release");
-    if (!f.open(QIODevice::ReadOnly)) return false;
-    return f.readAll().contains("ID=fedora");
-}
-
-bool UpdateChecker::isRpmOstree() {
-    QProcess p;
-    p.start("which", {"rpm-ostree"});
-    p.waitForFinished(2000);
-    return p.exitCode() == 0;
-}
-
-bool UpdateChecker::installRpm(const QString &rpmPath) {
-    QStringList args = isRpmOstree() ? QStringList{"rpm-ostree", "install", rpmPath}
-                                      : QStringList{"dnf", "install", "-y", rpmPath};
-    QProcess p;
-    p.start("pkexec", args);
-    if (!p.waitForFinished(-1)) return false;
-    return p.exitCode() == 0;
-}
-
 bool UpdateChecker::versionGreater(const QString &a, const QString &b) {
     const auto pa = a.split('.'), pb = b.split('.');
     for (int i = 0; i < qMax(pa.size(), pb.size()); ++i) {
@@ -57,8 +45,57 @@ bool UpdateChecker::versionGreater(const QString &a, const QString &b) {
     return false;
 }
 
+// We publish plain archives (a zip on Windows, a tar.gz on Linux), not installers, so
+// "updating" means extracting the new build somewhere and pointing the user at it rather than
+// silently overwriting the currently-running executable (which Windows won't even allow while
+// it's in use).
+static bool extractZip(const QString &zipPath, const QString &destDir, QString *error) {
+#ifdef Q_OS_WIN
+    mz_zip_archive zip;
+    memset(&zip, 0, sizeof(zip));
+    const QByteArray zipPathBytes = zipPath.toLocal8Bit();
+    if (!mz_zip_reader_init_file(&zip, zipPathBytes.constData(), 0)) {
+        if (error) *error = "Failed to open update archive";
+        return false;
+    }
+    const mz_uint numFiles = mz_zip_reader_get_num_files(&zip);
+    QDir().mkpath(destDir);
+    bool ok = true;
+    for (mz_uint i = 0; i < numFiles; ++i) {
+        mz_zip_archive_file_stat stat;
+        if (!mz_zip_reader_file_stat(&zip, i, &stat)) { ok = false; break; }
+        QString name = QString::fromUtf8(stat.m_filename);
+        name.replace('\\', '/');
+        const QString outPath = destDir + "/" + name;
+        if (mz_zip_reader_is_file_a_directory(&zip, i)) { QDir().mkpath(outPath); continue; }
+        QDir().mkpath(QFileInfo(outPath).path());
+        const QByteArray outPathBytes = outPath.toLocal8Bit();
+        if (!mz_zip_reader_extract_to_file(&zip, i, outPathBytes.constData(), 0)) { ok = false; break; }
+    }
+    mz_zip_reader_end(&zip);
+    if (!ok && error) *error = "Failed to extract update archive";
+    return ok;
+#else
+    Q_UNUSED(zipPath);
+    Q_UNUSED(destDir);
+    if (error) *error = "Not a zip archive on this platform";
+    return false;
+#endif
+}
+
+static bool extractTarGz(const QString &archivePath, const QString &destDir, QString *error) {
+    QDir().mkpath(destDir);
+    QProcess p;
+    p.start("tar", {"-xzf", archivePath, "-C", destDir});
+    if (!p.waitForFinished(60000) || p.exitCode() != 0) {
+        if (error) *error = QString::fromUtf8(p.readAllStandardError());
+        return false;
+    }
+    return true;
+}
+
 void UpdateChecker::check(bool isManual) {
-    QNetworkRequest req{QUrl("https://api.github.com/repos/pcpapc172/gdlauncher/releases/latest")};
+    QNetworkRequest req{QUrl(QString("https://api.github.com/repos/%1/releases/latest").arg(kUpdateRepo))};
     req.setRawHeader("Accept", "application/vnd.github+json");
     req.setRawHeader("X-GitHub-Api-Version", "2022-11-28");
     QNetworkReply *reply = m_net.get(req);
@@ -66,6 +103,7 @@ void UpdateChecker::check(bool isManual) {
     connect(reply, &QNetworkReply::finished, this, [this, reply, isManual]() {
         reply->deleteLater();
         if (reply->error() != QNetworkReply::NoError) {
+            GD_DEBUG_LOG("update", QString("Update check failed: %1").arg(reply->errorString()));
             if (isManual) QMessageBox::critical(m_dialogParent, "Update Error", reply->errorString());
             return;
         }
@@ -73,34 +111,29 @@ void UpdateChecker::check(bool isManual) {
         QString tag = data.value("tag_name").toString();
         const QString latestVersion = tag.startsWith('v') ? tag.mid(1) : tag;
         const QString currentVersion = QCoreApplication::applicationVersion();
+        GD_DEBUG_LOG("update", QString("Latest release: %1 (current: %2)").arg(latestVersion, currentVersion));
 
         if (!versionGreater(latestVersion, currentVersion)) {
             if (isManual) QMessageBox::information(m_dialogParent, "No Updates", "You already have the latest version.");
             return;
         }
 
+        // Matches what release.yml actually publishes: gdlauncher-windows-x86_64.zip and
+        // gdlauncher-linux-x86_64.tar.gz.
         QJsonObject updateAsset;
         const QJsonArray assets = data.value("assets").toArray();
-        if (isLinux()) {
-            if (isFedora()) {
-                for (const QJsonValue &av : assets)
-                    if (av.toObject().value("name").toString().endsWith(".rpm")) { updateAsset = av.toObject(); break; }
-            }
-            if (updateAsset.isEmpty()) {
-                for (const QJsonValue &av : assets)
-                    if (av.toObject().value("name").toString().endsWith(".deb")) { updateAsset = av.toObject(); break; }
-            }
-        } else {
-            for (const QJsonValue &av : assets) {
-                const QString name = av.toObject().value("name").toString();
-                if (name.endsWith(".exe") || name.endsWith("-Setup.exe")) { updateAsset = av.toObject(); break; }
-            }
+        for (const QJsonValue &av : assets) {
+            const QString name = av.toObject().value("name").toString();
+            const bool matchesPlatform = isLinux() ? name.contains("linux", Qt::CaseInsensitive)
+                                                    : name.contains("windows", Qt::CaseInsensitive);
+            const bool matchesExtension = isLinux() ? name.endsWith(".tar.gz") : name.endsWith(".zip");
+            if (matchesPlatform && matchesExtension) { updateAsset = av.toObject(); break; }
         }
 
         if (updateAsset.isEmpty()) {
             if (isManual)
                 QMessageBox::warning(m_dialogParent, "No Compatible Update",
-                    QString("Update %1 is available, but no compatible installer was found for your platform.").arg(latestVersion));
+                    QString("Update %1 is available, but no compatible build was found for your platform.").arg(latestVersion));
             return;
         }
 
@@ -113,6 +146,7 @@ void UpdateChecker::check(bool isManual) {
         const QString assetName = updateAsset.value("name").toString();
         const QString downloadUrl = updateAsset.value("browser_download_url").toString();
         const QString downloadPath = QStandardPaths::writableLocation(QStandardPaths::TempLocation) + "/" + assetName;
+        GD_DEBUG_LOG("update", QString("Downloading %1").arg(downloadUrl));
 
         emit statusUpdate("Downloading update...");
         emit progressStart();
@@ -126,23 +160,41 @@ void UpdateChecker::check(bool isManual) {
         connect(dlReply, &QNetworkReply::downloadProgress, this, [this](qint64 recv, qint64 total) {
             if (total > 0) emit progress(static_cast<int>(recv * 100 / total));
         });
-        connect(dlReply, &QNetworkReply::finished, this, [this, dlReply, out, downloadPath]() {
+        connect(dlReply, &QNetworkReply::finished, this, [this, dlReply, out, downloadPath, assetName, latestVersion]() {
             out->close();
             dlReply->deleteLater();
             out->deleteLater();
-            if (dlReply->error() != QNetworkReply::NoError) return;
+            if (dlReply->error() != QNetworkReply::NoError) {
+                GD_DEBUG_LOG("update", QString("Download failed: %1").arg(dlReply->errorString()));
+                QMessageBox::critical(m_dialogParent, "Update Error", dlReply->errorString());
+                return;
+            }
 
             emit progressComplete();
+            emit statusUpdate("Extracting update...");
 
-            if (isLinux() && isFedora() && downloadPath.endsWith(".rpm")) {
-                emit statusUpdate("Installing update...");
-                if (installRpm(downloadPath)) {
-                    QMessageBox::information(m_dialogParent, "Update Installed", "Update installed successfully. Restarting…");
-                    QCoreApplication::quit();
-                }
-            } else {
-                QDesktopServices::openUrl(QUrl::fromLocalFile(downloadPath));
+            const QString extractDir = QStandardPaths::writableLocation(QStandardPaths::TempLocation) +
+                                        QString("/gdlauncher-update-%1").arg(latestVersion);
+            if (QFileInfo::exists(extractDir)) QDir(extractDir).removeRecursively();
+
+            QString err;
+            const bool ok = assetName.endsWith(".zip") ? extractZip(downloadPath, extractDir, &err)
+                                                        : extractTarGz(downloadPath, extractDir, &err);
+            QFile::remove(downloadPath);
+
+            if (!ok) {
+                GD_DEBUG_LOG("update", QString("Extraction failed: %1").arg(err));
+                QMessageBox::critical(m_dialogParent, "Update Error", QString("Failed to extract the update: %1").arg(err));
+                return;
             }
+
+            GD_DEBUG_LOG("update", QString("Update extracted to %1").arg(extractDir));
+            emit statusUpdate("Ready");
+            QMessageBox::information(m_dialogParent, "Update Downloaded",
+                QString("Version %1 has been downloaded and extracted. This will now open that "
+                        "folder -- close GDLauncher and replace your existing installation with "
+                        "the files there.").arg(latestVersion));
+            QDesktopServices::openUrl(QUrl::fromLocalFile(extractDir));
         });
     });
 }

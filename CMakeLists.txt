@@ -84,6 +84,10 @@ set(APP_HEADERS
     src/ui/XmlHighlighter.h
 )
 
+if(WIN32)
+    list(APPEND APP_SOURCES resources/app.rc)
+endif()
+
 qt_add_executable(gdlauncher ${APP_SOURCES} ${APP_HEADERS} resources/resources.qrc)
 
 target_link_libraries(gdlauncher PRIVATE Qt6::Core Qt6::Widgets Qt6::Network Qt6::Concurrent ZLIB::ZLIB miniz)
@@ -106,3 +110,61 @@ if(WIN32)
 endif()
 
 install(TARGETS gdlauncher RUNTIME DESTINATION bin)
+
+if(UNIX AND NOT APPLE)
+    install(FILES resources/gdlauncher.desktop DESTINATION share/applications)
+    install(FILES resources/icon.png DESTINATION share/icons/hicolor/256x256/apps RENAME gdlauncher.png)
+endif()
+
+# --- CPack: .deb / .rpm on Linux, NSIS (.exe) / WiX (.msi) on Windows ---
+# The zip/tar.gz release artifacts are self-contained (bundled Qt libs via windeployqt, or built
+# against system Qt on Linux); these packages instead declare Qt as a real dependency so a
+# system's package manager (or the installer, on Windows) resolves it, which is what users
+# installing via apt/dnf/an installer actually expect.
+set(CPACK_PACKAGE_NAME "gdlauncher")
+set(CPACK_PACKAGE_VENDOR "pcpapc172")
+set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Game Instance Launcher for Geometry Dash")
+set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/pcpapc172/gdlaunchercpp")
+set(CPACK_PACKAGE_CONTACT "pcpapc172")
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE")
+
+# Debian/Ubuntu (.deb)
+set(CPACK_DEBIAN_PACKAGE_MAINTAINER "pcpapc172")
+set(CPACK_DEBIAN_PACKAGE_SECTION "games")
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "libqt6core6, libqt6widgets6, libqt6network6, libqt6concurrent6, zlib1g, wine")
+set(CPACK_DEBIAN_FILE_NAME "gdlauncher-${PROJECT_VERSION}-amd64.deb")
+
+# Fedora/RHEL (.rpm)
+set(CPACK_RPM_PACKAGE_LICENSE "MIT")
+set(CPACK_RPM_PACKAGE_GROUP "Amusements/Games")
+set(CPACK_RPM_PACKAGE_REQUIRES "qt6-qtbase, zlib, wine")
+set(CPACK_RPM_FILE_NAME "gdlauncher-${PROJECT_VERSION}-1.x86_64.rpm")
+
+# Windows NSIS installer (.exe)
+set(CPACK_NSIS_PACKAGE_NAME "GDLauncher")
+set(CPACK_NSIS_DISPLAY_NAME "GDLauncher")
+set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
+set(CPACK_NSIS_MODIFY_PATH OFF)
+set(CPACK_NSIS_EXECUTABLES_DIRECTORY "bin")
+set(CPACK_NSIS_INSTALLED_ICON_NAME "bin\\\\gdlauncher.exe")
+set(CPACK_NSIS_MUI_ICON "${CMAKE_SOURCE_DIR}/resources/icon.ico")
+set(CPACK_NSIS_MUI_UNIICON "${CMAKE_SOURCE_DIR}/resources/icon.ico")
+set(CPACK_NSIS_CREATE_ICONS_EXTRA "CreateShortCut '$SMPROGRAMS\\\\$STARTMENU_FOLDER\\\\GDLauncher.lnk' '$INSTDIR\\\\bin\\\\gdlauncher.exe'")
+set(CPACK_NSIS_DELETE_ICONS_EXTRA "Delete '$SMPROGRAMS\\\\$STARTMENU_FOLDER\\\\GDLauncher.lnk'")
+
+# Windows MSI (WiX)
+set(CPACK_WIX_UPGRADE_GUID "6E6F5A4F-6D53-4E8E-9E30-6D6C0D7B7C63")
+set(CPACK_WIX_PRODUCT_ICON "${CMAKE_SOURCE_DIR}/resources/icon.ico")
+
+if(NOT CPACK_GENERATOR)
+    if(WIN32)
+        set(CPACK_GENERATOR "ZIP")
+    elseif(APPLE)
+        set(CPACK_GENERATOR "TGZ")
+    else()
+        set(CPACK_GENERATOR "TGZ")
+    endif()
+endif()
+
+include(CPack)
