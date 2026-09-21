@@ -1,0 +1,75 @@
+name: Build
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qt6-base-dev zlib1g-dev build-essential cmake ninja-build
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Strip binary
+        run: strip build/gdlauncher
+
+      - name: Report binary size
+        run: ls -lh build/gdlauncher
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gdlauncher-linux-x86_64-${{ github.sha }}
+          path: build/gdlauncher
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.*'
+          arch: 'win64_msvc2019_64'
+
+      - name: Install zlib (vcpkg)
+        run: |
+          git clone https://github.com/microsoft/vcpkg C:\vcpkg
+          C:\vcpkg\bootstrap-vcpkg.bat
+          C:\vcpkg\vcpkg.exe install zlib:x64-windows
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows
+
+      - name: Build
+        run: cmake --build build --config Release -j
+
+      - name: Deploy Qt runtime
+        run: windeployqt --release build\Release\gdlauncher.exe
+        shell: cmd
+
+      - name: Copy zlib runtime
+        run: Copy-Item C:\vcpkg\installed\x64-windows\bin\zlib1.dll build\Release\
+        shell: pwsh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gdlauncher-windows-x86_64-${{ github.sha }}
+          path: build/Release
+          if-no-files-found: error
