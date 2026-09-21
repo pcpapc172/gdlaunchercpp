@@ -81,7 +81,7 @@ jobs:
           path: build/Release
           if-no-files-found: error
 
-  windows-debug:
+  windows-verbose-logging:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -99,24 +99,28 @@ jobs:
           C:\vcpkg\vcpkg.exe install zlib:x64-windows
 
       # Verbose live logging (version detection, download/extraction progress, instance ops,
-      # launch steps) baked in, and -- unlike the release build above -- keeps the console
-      # subsystem so that output is visible when run from a terminal, not just in the
-      # auto-opened log console window.
-      - name: Configure (Debug + verbose logging)
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DGDLAUNCHER_DEBUG_LOGGING=ON -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows
+      # launch steps) baked in, and -- unlike the plain release build above -- keeps the
+      # console subsystem so output is visible when run from a terminal. Deliberately still a
+      # Release *build type* (optimized, release CRT): a true Debug build links the MSVC debug
+      # CRT (ucrtbased.dll, msvcp140d.dll, ...), which isn't redistributable, won't run without
+      # a Visual Studio install, and its rarity/oddity is exactly what got a Debug-built exe
+      # flagged as a false positive by a scanner. This gets the same live logging without any
+      # of that.
+      - name: Configure (Release + verbose logging)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DGDLAUNCHER_DEBUG_LOGGING=ON -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows
 
       - name: Build
-        run: cmake --build build --config Debug -j
+        run: cmake --build build --config Release -j
 
       - name: Deploy Qt runtime
-        run: windeployqt --debug build\Debug\gdlauncher.exe
+        run: windeployqt --release build\Release\gdlauncher.exe
         shell: cmd
 
       - name: Copy zlib runtime
         run: |
           $dll = Get-ChildItem -Path C:\vcpkg\installed -Recurse -Filter 'zlib*.dll' -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($dll) {
-            Copy-Item $dll.FullName build\Debug\
+            Copy-Item $dll.FullName build\Release\
             Write-Host "Copied $($dll.FullName)"
           } else {
             Write-Host "No zlib DLL found; assuming it was linked statically."
@@ -126,6 +130,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gdlauncher-windows-x86_64-debug-${{ github.sha }}
-          path: build/Debug
+          name: gdlauncher-windows-x86_64-verbose-logging-${{ github.sha }}
+          path: build/Release
           if-no-files-found: error
