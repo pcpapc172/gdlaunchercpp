@@ -57,6 +57,7 @@ set(APP_SOURCES
     src/ui/Animations.cpp
     src/ui/WelcomeDialog.cpp
     src/ui/ChangelogDialog.cpp
+    src/ui/XmlHighlighter.cpp
 )
 
 set(APP_HEADERS
@@ -80,6 +81,7 @@ set(APP_HEADERS
     src/ui/Animations.h
     src/ui/WelcomeDialog.h
     src/ui/ChangelogDialog.h
+    src/ui/XmlHighlighter.h
 )
 
 qt_add_executable(gdlauncher ${APP_SOURCES} ${APP_HEADERS} resources/resources.qrc)

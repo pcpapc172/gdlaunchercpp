@@ -132,7 +132,12 @@ InstanceDialog::InstanceDialog(QWidget *parent, bool editMode, const QJsonObject
     connect(cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
     connect(saveBtn, &QPushButton::clicked, this, &InstanceDialog::onSave);
     connect(m_localVersionCombo, &QComboBox::currentTextChanged, this, &InstanceDialog::onLocalVersionChanged);
-    connect(m_openInEditorBtn, &QPushButton::clicked, this, [this]() { emit openInEditorRequested(); accept(); });
+    // Mirrors the original's behavior: this closes the instance modal WITHOUT saving (the
+    // instance's fields aren't even fully filled in at this point) and opens the save editor
+    // instead. Using accept() here would make MainWindow::onEdit() treat it as a real Save and
+    // call InstanceManager::editInstance() with this dialog's never-populated m_result, which
+    // is how "An instance with that name already exists" was showing up spuriously.
+    connect(m_openInEditorBtn, &QPushButton::clicked, this, [this]() { emit openInEditorRequested(); reject(); });
 
     populateVersions();
 

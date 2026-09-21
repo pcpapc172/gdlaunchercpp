@@ -3,6 +3,7 @@
 #include "../Settings.h"
 #include "Theme.h"
 #include "Animations.h"
+#include "XmlHighlighter.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QComboBox>
@@ -20,6 +21,9 @@
 #include <QIcon>
 #include <QStyle>
 #include <QApplication>
+#include <QFont>
+#include <QtConcurrent/QtConcurrent>
+#include <QFutureWatcher>
 
 namespace {
 const QStringList kOfficialSongs = {
@@ -290,31 +294,85 @@ void SaveEditorDialog::onImportNew() {
 }
 
 void SaveEditorDialog::onEditRaw() {
-    if (m_selectedKey.isEmpty() && SaveEditor::hasSession() == false) return;
+    // This edits the WHOLE save session (every level's dict, exactly what the Electron build's
+    // Monaco editor showed via editor-get-xml/editor-save-xml) -- not just the currently
+    // selected level. A single level's raw data is edited via getRaw()/saveAll() elsewhere
+    // (the "raw" the level list exposes for import/export), which is a different, narrower op.
+    if (!SaveEditor::hasSession()) return;
 
-    QDialog dlg(this);
-    dlg.setWindowTitle("Raw Level Data Editor");
-    dlg.resize(700, 500);
-    auto *layout = new QVBoxLayout(&dlg);
-    auto *edit = new QPlainTextEdit(&dlg);
-    QString raw;
-    if (!m_selectedKey.isEmpty()) SaveEditor::getRaw(m_selectedKey, &raw);
-    edit->setPlainText(raw);
-    layout->addWidget(edit);
-    auto *box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    auto *dlg = new QDialog(this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    dlg->setWindowTitle("Raw Save Data Editor");
+    dlg->setWindowIcon(QIcon(":/icon.png"));
+    dlg->resize(900, 650);
+    auto *layout = new QVBoxLayout(dlg);
+    layout->setContentsMargins(UiMetrics::kMargin, UiMetrics::kMargin, UiMetrics::kMargin, UiMetrics::kMargin);
+    layout->setSpacing(UiMetrics::kSpacing);
+
+    auto *edit = new QPlainTextEdit(dlg);
+    edit->setReadOnly(true);
+    edit->setPlainText("Loading full save data...");
+    edit->setLineWrapMode(QPlainTextEdit::NoWrap);
+    // A VS Code Dark+-styled surface regardless of the app's own theme, since that's what the
+    // highlighter's colors are tuned for.
+    edit->setStyleSheet("QPlainTextEdit { background-color: #1e1e1e; color: #d4d4d4; "
+                         "border: 1px solid #3c3c3c; border-radius: 6px; padding: 8px; }");
+    QFont monoFont("Consolas");
+    monoFont.setStyleHint(QFont::Monospace);
+    monoFont.setPointSize(10);
+    edit->setFont(monoFont);
+    new XmlHighlighter(edit->document());
+    layout->addWidget(edit, 1);
+
+    auto *box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, dlg);
+    box->button(QDialogButtonBox::Ok)->setText("Apply Changes");
+    box->button(QDialogButtonBox::Ok)->setObjectName("primary");
+    box->setEnabled(false);
     layout->addWidget(box);
-    connect(box, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
-    connect(box, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    connect(box, &QDialogButtonBox::rejected, dlg, &QDialog::reject);
+    connect(box, &QDialogButtonBox::accepted, dlg, [this, dlg, edit, box]() {
+        box->setEnabled(false);
+        edit->setReadOnly(true);
+        const QString newXml = edit->toPlainText();
 
-    if (dlg.exec() == QDialog::Accepted && !m_selectedKey.isEmpty()) {
-        SaveEditor::SaveAllUpdates updates;
-        updates.hasRawData = true;
-        updates.rawData = edit->toPlainText();
-        if (SaveEditor::saveAll(m_selectedKey, updates).success) {
-            QMessageBox::information(this, "Updated", "Raw data updated in session! (Click Save to commit to disk)");
-            reloadLevels();
+        auto *watcher = new QFutureWatcher<SaveEditorResult>(dlg);
+        connect(watcher, &QFutureWatcher<SaveEditorResult>::finished, dlg, [this, dlg, box, watcher]() {
+            const SaveEditorResult res = watcher->result();
+            watcher->deleteLater();
+            if (res.success) {
+                dlg->accept();
+                reloadLevels();
+                QMessageBox::information(this, "Updated", "Save data updated in session! (Click Save to commit to disk)");
+            } else {
+                QMessageBox::warning(this, "Failed to parse XML", res.error);
+                box->setEnabled(true);
+            }
+        });
+        watcher->setFuture(QtConcurrent::run([newXml]() { return SaveEditor::saveXml(newXml); }));
+    });
+
+    // buildPretty() over the whole save can take a moment for large saves with many custom
+    // levels (their raw level strings are embedded inline), so it runs off the UI thread --
+    // this is what was freezing the app before.
+    auto *loadWatcher = new QFutureWatcher<QPair<bool, QString>>(dlg);
+    connect(loadWatcher, &QFutureWatcher<QPair<bool, QString>>::finished, dlg, [edit, box, loadWatcher]() {
+        const auto result = loadWatcher->result();
+        loadWatcher->deleteLater();
+        if (result.first) {
+            edit->setPlainText(result.second);
+            edit->setReadOnly(false);
+            box->setEnabled(true);
+        } else {
+            edit->setPlainText("Failed to load save data.");
         }
-    }
+    });
+    loadWatcher->setFuture(QtConcurrent::run([]() {
+        QString xml;
+        const SaveEditorResult res = SaveEditor::getXml(&xml);
+        return qMakePair(res.success, xml);
+    }));
+
+    dlg->exec();
 }
 
 void SaveEditorDialog::onSaveRaw() {}
