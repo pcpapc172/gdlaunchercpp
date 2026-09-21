@@ -80,3 +80,52 @@ jobs:
           name: gdlauncher-windows-x86_64-${{ github.sha }}
           path: build/Release
           if-no-files-found: error
+
+  windows-debug:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.*'
+          arch: 'win64_msvc2019_64'
+
+      - name: Install zlib (vcpkg)
+        run: |
+          git clone https://github.com/microsoft/vcpkg C:\vcpkg
+          C:\vcpkg\bootstrap-vcpkg.bat
+          C:\vcpkg\vcpkg.exe install zlib:x64-windows
+
+      # Verbose live logging (version detection, download/extraction progress, instance ops,
+      # launch steps) baked in, and -- unlike the release build above -- keeps the console
+      # subsystem so that output is visible when run from a terminal, not just in the
+      # auto-opened log console window.
+      - name: Configure (Debug + verbose logging)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DGDLAUNCHER_DEBUG_LOGGING=ON -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows
+
+      - name: Build
+        run: cmake --build build --config Debug -j
+
+      - name: Deploy Qt runtime
+        run: windeployqt --debug build\Debug\gdlauncher.exe
+        shell: cmd
+
+      - name: Copy zlib runtime
+        run: |
+          $dll = Get-ChildItem -Path C:\vcpkg\installed -Recurse -Filter 'zlib*.dll' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($dll) {
+            Copy-Item $dll.FullName build\Debug\
+            Write-Host "Copied $($dll.FullName)"
+          } else {
+            Write-Host "No zlib DLL found; assuming it was linked statically."
+          }
+        shell: pwsh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gdlauncher-windows-x86_64-debug-${{ github.sha }}
+          path: build/Debug
+          if-no-files-found: error

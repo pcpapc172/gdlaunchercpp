@@ -127,6 +127,7 @@ InstanceDialog::InstanceDialog(QWidget *parent, bool editMode, const QJsonObject
     connect(m_geodeLogCheck, &QCheckBox::toggled, this, [this](bool checked) {
         m_geodeLogVersionSection->setVisible(checked);
         if (checked && m_geodeLogVersionCombo->count() <= 1) fetchLogModVersions();
+        resizeToContent();
     });
     connect(browseBtn, &QPushButton::clicked, this, &InstanceDialog::browseForExe);
     connect(cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
@@ -188,6 +189,17 @@ void InstanceDialog::updateGeodeLogUI() {
         m_geodeLogCheck->setChecked(false);
         m_geodeLogVersionSection->setVisible(false);
     }
+    resizeToContent();
+}
+
+void InstanceDialog::resizeToContent() {
+    // Hiding a section leaves the QDialog at its old (taller) size -- Qt doesn't shrink a
+    // top-level window just because a child widget disappeared -- which left a dead gap
+    // between the checkboxes and the buttons below, and made the whole dialog look like it
+    // "shifted" content down into empty space. Re-fitting after every visibility change keeps
+    // the dialog hugging its actual content.
+    layout()->activate();
+    adjustSize();
 }
 
 void InstanceDialog::browseForExe() {

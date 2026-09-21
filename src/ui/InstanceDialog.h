@@ -52,5 +52,6 @@ private:
 
     void populateVersions();
     void loadVersionDefaults();
+    void resizeToContent();
     QJsonObject m_result;
 };

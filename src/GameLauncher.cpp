@@ -194,10 +194,18 @@ void GameLauncher::launchInstance(const QString &instanceName) {
     ctx.instanceName = instanceName;
     ctx.data = data;
 
-    if (data.value("versionType").toString() == "local") {
-        ctx.versionPath = Settings::versionsDir() + "/" + data.value("version").toString();
+    const bool isCustomExe = data.value("versionType").toString() != "local";
+
+    if (isCustomExe) {
+        // Custom Executable: executablePath IS the .exe itself (that's what the file-picker
+        // in InstanceDialog stores), so the working directory is its parent folder -- it must
+        // never be joined onto itself as if it were a versions/<category>/<version> directory
+        // (that produced paths like ".../GeometryDash.exe/GeometryDash.exe" and always failed
+        // with "Game executable not found").
+        ctx.exePath = data.value("executablePath").toString();
+        ctx.versionPath = QFileInfo(ctx.exePath).absolutePath();
     } else {
-        ctx.versionPath = data.value("executablePath").toString();
+        ctx.versionPath = Settings::versionsDir() + "/" + data.value("version").toString();
     }
     GD_DEBUG_LOG("launch", QString("Resolved version path: %1").arg(ctx.versionPath));
 
@@ -208,16 +216,18 @@ void GameLauncher::launchInstance(const QString &instanceName) {
         return;
     }
 
-    QString executable = "GeometryDash.exe";
-    const QString versionJsonPath = ctx.versionPath + "/version.json";
-    if (QFileInfo::exists(versionJsonPath)) {
-        QFile vf(versionJsonPath);
-        vf.open(QIODevice::ReadOnly);
-        const QJsonObject vc = QJsonDocument::fromJson(vf.readAll()).object();
-        if (vc.contains("executable")) executable = vc.value("executable").toString();
+    if (!isCustomExe) {
+        QString executable = "GeometryDash.exe";
+        const QString versionJsonPath = ctx.versionPath + "/version.json";
+        if (QFileInfo::exists(versionJsonPath)) {
+            QFile vf(versionJsonPath);
+            vf.open(QIODevice::ReadOnly);
+            const QJsonObject vc = QJsonDocument::fromJson(vf.readAll()).object();
+            if (vc.contains("executable")) executable = vc.value("executable").toString();
+        }
+        ctx.exePath = ctx.versionPath + "/" + executable;
     }
 
-    ctx.exePath = ctx.versionPath + "/" + executable;
     GD_DEBUG_LOG("launch", QString("Resolved executable: %1").arg(ctx.exePath));
     if (!QFileInfo::exists(ctx.exePath)) {
         GD_DEBUG_LOG("launch", "Executable does not exist");
@@ -271,7 +281,7 @@ void GameLauncher::launchInstance(const QString &instanceName) {
     const AppSettings settings = Settings::load();
     ctx.syncDelay = qMax(0, settings.syncDelay) * 1000;
     ctx.enableLogOutput = settings.enableLogOutput;
-    ctx.processName = QFileInfo(executable).fileName();
+    ctx.processName = QFileInfo(ctx.exePath).fileName();
 
     deployGeodeLogModIfNeeded(ctx);
 

@@ -100,7 +100,28 @@ QString Theme::styleSheet(Kind kind) {
         }
 
         QCheckBox, QRadioButton { spacing: 8px; padding: 3px 0; }
-        QCheckBox::indicator, QRadioButton::indicator { width: 16px; height: 16px; }
+        /* Once you set ANY property on ::indicator, Qt stops drawing the native box and
+           expects the stylesheet to supply the whole look -- without an explicit
+           border/background here the indicator renders as a blank, invisible square. */
+        QCheckBox::indicator, QRadioButton::indicator {
+            width: 15px;
+            height: 15px;
+            border: 1px solid %5;
+            border-radius: 3px;
+            background-color: %11;
+        }
+        QCheckBox::indicator:hover, QRadioButton::indicator:hover { border-color: %9; }
+        QCheckBox::indicator:checked, QRadioButton::indicator:checked {
+            background-color: %9;
+            border-color: %9;
+        }
+        QRadioButton::indicator {
+            border-radius: 8px;
+        }
+        QRadioButton::indicator:checked {
+            border: 4px solid %9;
+            background-color: %11;
+        }
 
         QGroupBox {
             border: 1px solid %5;

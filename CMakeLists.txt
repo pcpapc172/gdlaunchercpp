@@ -95,7 +95,14 @@ if(GDLAUNCHER_DEBUG_LOGGING)
 endif()
 
 if(WIN32)
-    set_target_properties(gdlauncher PROPERTIES WIN32_EXECUTABLE ON)
+    if(GDLAUNCHER_DEBUG_LOGGING)
+        # Keep the console subsystem for a debug-logging build: WIN32_EXECUTABLE detaches the
+        # process from stdout/stderr entirely, so qDebug() output from GD_DEBUG_LOG would go
+        # nowhere even if you launched the exe from a terminal expecting to see it.
+        message(STATUS "GDLauncher: keeping console subsystem so debug logging is visible from a terminal")
+    else()
+        set_target_properties(gdlauncher PROPERTIES WIN32_EXECUTABLE ON)
+    endif()
 endif()
 
 install(TARGETS gdlauncher RUNTIME DESTINATION bin)
