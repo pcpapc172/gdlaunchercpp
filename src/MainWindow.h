@@ -3,6 +3,7 @@
 #include <QVector>
 #include "InstanceManager.h"
 #include "Settings.h"
+#include "VersionManager.h"
 
 class QTableWidget;
 class QPushButton;
@@ -46,6 +47,7 @@ private:
 
     GameLauncher *m_launcher;
     UpdateChecker *m_updateChecker;
+    VersionManager *m_versionManager;
     ConsoleWindow *m_consoleWindow = nullptr;
     LogPipeServer *m_logPipe;
 

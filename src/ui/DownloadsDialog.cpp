@@ -19,12 +19,15 @@
 #include <QApplication>
 #include <QIcon>
 
-DownloadsDialog::DownloadsDialog(QWidget *parent) : QDialog(parent) {
+namespace {
+constexpr const char *kExtractingChunkStyle = "QProgressBar::chunk { background-color: #2ecc71; border-radius: 5px; }";
+}
+
+DownloadsDialog::DownloadsDialog(QWidget *parent, VersionManager *versionManager)
+    : QDialog(parent), m_versionManager(versionManager) {
     setWindowTitle("Downloads");
     resize(1000, 700);
     setWindowIcon(QIcon(":/icon.png"));
-
-    m_versionManager = new VersionManager(this);
 
     auto *root = new QVBoxLayout(this);
     root->setContentsMargins(UiMetrics::kMargin, UiMetrics::kMargin, UiMetrics::kMargin, UiMetrics::kMargin);
@@ -86,15 +89,32 @@ DownloadsDialog::DownloadsDialog(QWidget *parent) : QDialog(parent) {
             bar->setVisible(true);
             if (total > 0) bar->setValue(static_cast<int>(recv * 100 / total));
         }
+        if (auto *label = card->findChild<QLabel *>("progressLabel")) {
+            const QString pct = total > 0 ? QString::number(recv * 100 / total) : "0";
+            label->setText(QString("Downloading... %1%").arg(pct));
+        }
+    });
+    connect(m_versionManager, &VersionManager::extractionStarted, this, [this](const QString &id) {
+        QWidget *card = m_cardWidgets.value(id);
+        if (!card) return;
+        if (auto *bar = card->findChild<QProgressBar *>()) {
+            bar->setVisible(true);
+            bar->setValue(0);
+            bar->setStyleSheet(kExtractingChunkStyle);
+        }
+        if (auto *label = card->findChild<QLabel *>("progressLabel")) label->setText("Extracting... 0%");
+    });
+    connect(m_versionManager, &VersionManager::extractionProgress, this, [this](const QString &id, qint64 cur, qint64 total) {
+        QWidget *card = m_cardWidgets.value(id);
+        if (!card) return;
+        const int pct = total > 0 ? static_cast<int>(cur * 100 / total) : 0;
+        if (auto *bar = card->findChild<QProgressBar *>()) bar->setValue(pct);
+        if (auto *label = card->findChild<QLabel *>("progressLabel")) label->setText(QString("Extracting... %1%").arg(pct));
     });
     connect(m_versionManager, &VersionManager::downloadFinished, this, [this](const QString &id, bool success, const QString &message) {
         Q_UNUSED(id);
-        if (success) {
-            refresh();
-        } else {
-            QMessageBox::warning(this, "Download failed", message.isEmpty() ? "Download failed" : message);
-            refresh();
-        }
+        if (!success && message != "Cancelled") QMessageBox::warning(this, "Download failed", message.isEmpty() ? "Download failed" : message);
+        refresh();
     });
 
     refresh();
@@ -145,6 +165,7 @@ void DownloadsDialog::renderList(const QString &filter) {
         QWidget *card = buildCard(v);
         m_listLayout->insertWidget(m_listLayout->count() - 1, card);
         m_cardWidgets[v.value("id").toString()] = card;
+        applyOperationState(card, v.value("id").toString());
     }
 }
 
@@ -177,6 +198,21 @@ QWidget *DownloadsDialog::buildCard(const QJsonObject &v) {
     sizeLabel->setStyleSheet("opacity:0.7; font-size:12px;");
     layout->addWidget(sizeLabel);
 
+    auto *progressRow = new QHBoxLayout();
+    progressRow->setSpacing(UiMetrics::kTightSpacing);
+    auto *progressLabel = new QLabel(card);
+    progressLabel->setObjectName("progressLabel");
+    progressLabel->setStyleSheet("font-size:12px;");
+    progressLabel->setVisible(false);
+    auto *cancelBtn = new QPushButton("Cancel", card);
+    cancelBtn->setObjectName("cancelBtn");
+    cancelBtn->setVisible(false);
+    cancelBtn->setMaximumWidth(80);
+    progressRow->addWidget(progressLabel, 1);
+    progressRow->addWidget(cancelBtn);
+    layout->addLayout(progressRow);
+    connect(cancelBtn, &QPushButton::clicked, this, [this, id]() { m_versionManager->cancelOperation(id); });
+
     auto *progressBar = new AnimatedProgressBar(card);
     progressBar->setRange(0, 100);
     progressBar->setVisible(false);
@@ -206,7 +242,7 @@ QWidget *DownloadsDialog::buildCard(const QJsonObject &v) {
         actions->addWidget(downloadBtn);
         connect(downloadBtn, &QPushButton::clicked, this, [this, id, downloadBtn]() {
             downloadBtn->setEnabled(false);
-            downloadBtn->setText("Downloading...");
+            downloadBtn->setText("Starting...");
             startDownload(id, false);
         });
     }
@@ -215,11 +251,43 @@ QWidget *DownloadsDialog::buildCard(const QJsonObject &v) {
     return card;
 }
 
+void DownloadsDialog::applyOperationState(QWidget *card, const QString &id) {
+    if (!m_versionManager->hasActiveOperation(id)) return;
+    const VersionOperation op = m_versionManager->activeOperation(id);
+
+    auto *bar = card->findChild<QProgressBar *>();
+    auto *progressLabel = card->findChild<QLabel *>("progressLabel");
+    auto *cancelBtn = card->findChild<QPushButton *>("cancelBtn");
+    const QList<QPushButton *> actionsWidgets = card->findChildren<QPushButton *>();
+
+    const int pct = op.total > 0 ? static_cast<int>(op.current * 100 / op.total) : 0;
+    const bool extracting = op.phase == VersionOperation::Phase::Extracting;
+
+    if (bar) {
+        bar->setVisible(true);
+        bar->setValue(pct);
+        if (extracting) bar->setStyleSheet(kExtractingChunkStyle);
+    }
+    if (progressLabel) {
+        progressLabel->setVisible(true);
+        progressLabel->setText(QString("%1... %2%").arg(extracting ? "Extracting" : "Downloading").arg(pct));
+    }
+    if (cancelBtn) cancelBtn->setVisible(true);
+
+    for (QPushButton *btn : actionsWidgets) {
+        if (btn->objectName() == "cancelBtn") continue;
+        btn->setEnabled(false);
+        if (btn->objectName() == "primary") btn->setText(extracting ? "Extracting..." : "Downloading...");
+    }
+}
+
 void DownloadsDialog::startDownload(const QString &id, bool /*repair*/) {
     for (const QJsonValue &vv : m_versions) {
         QJsonObject v = vv.toObject();
         if (v.value("id").toString() == id) {
             m_versionManager->downloadVersion(v);
+            QWidget *card = m_cardWidgets.value(id);
+            if (card) applyOperationState(card, id);
             return;
         }
     }

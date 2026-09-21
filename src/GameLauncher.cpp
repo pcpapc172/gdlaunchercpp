@@ -1,6 +1,7 @@
 #include "GameLauncher.h"
 #include "Settings.h"
 #include "InstanceManager.h"
+#include "DebugLog.h"
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -198,8 +199,10 @@ void GameLauncher::launchInstance(const QString &instanceName) {
     } else {
         ctx.versionPath = data.value("executablePath").toString();
     }
+    GD_DEBUG_LOG("launch", QString("Resolved version path: %1").arg(ctx.versionPath));
 
     if (!QFileInfo::exists(ctx.versionPath)) {
+        GD_DEBUG_LOG("launch", "Version path does not exist");
         emit launchComplete();
         emit statusUpdate("Version not found");
         return;
@@ -215,7 +218,9 @@ void GameLauncher::launchInstance(const QString &instanceName) {
     }
 
     ctx.exePath = ctx.versionPath + "/" + executable;
+    GD_DEBUG_LOG("launch", QString("Resolved executable: %1").arg(ctx.exePath));
     if (!QFileInfo::exists(ctx.exePath)) {
+        GD_DEBUG_LOG("launch", "Executable does not exist");
         emit launchComplete();
         emit statusUpdate("Game executable not found");
         return;
@@ -248,6 +253,7 @@ void GameLauncher::launchInstance(const QString &instanceName) {
     infoOut.close();
 
     emit statusUpdate(QString("Launching %1...").arg(instanceName));
+    GD_DEBUG_LOG("launch", QString("Spawning process: %1 (cwd=%2)").arg(ctx.exePath, ctx.versionPath));
 
     m_gameProcess = new QProcess(this);
     m_gameProcess->setWorkingDirectory(ctx.versionPath);

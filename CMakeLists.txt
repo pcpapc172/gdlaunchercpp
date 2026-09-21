@@ -12,7 +12,18 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 set(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG")
 
-find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network)
+# When ON, compiles in verbose diagnostic logging (detected local/remote versions,
+# download/extraction progress, instance operations, launch steps, ...) that streams live
+# into the log console. Off by default so a normal build has zero extra log overhead.
+# Also defaults ON for a Debug configuration, since that's what most people mean by "a debug
+# build" -- override either way with -DGDLAUNCHER_DEBUG_LOGGING=ON/OFF.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    option(GDLAUNCHER_DEBUG_LOGGING "Enable verbose live debug logging" ON)
+else()
+    option(GDLAUNCHER_DEBUG_LOGGING "Enable verbose live debug logging" OFF)
+endif()
+
+find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network Concurrent)
 find_package(ZLIB REQUIRED)
 
 # --- Vendored miniz (zip read/write) ---
@@ -28,6 +39,7 @@ set(APP_SOURCES
     src/main.cpp
     src/MainWindow.cpp
     src/Settings.cpp
+    src/DebugLog.cpp
     src/InstanceManager.cpp
     src/VersionManager.cpp
     src/GameLauncher.cpp
@@ -50,6 +62,7 @@ set(APP_SOURCES
 set(APP_HEADERS
     src/MainWindow.h
     src/Settings.h
+    src/DebugLog.h
     src/InstanceManager.h
     src/VersionManager.h
     src/GameLauncher.h
@@ -71,8 +84,13 @@ set(APP_HEADERS
 
 qt_add_executable(gdlauncher ${APP_SOURCES} ${APP_HEADERS} resources/resources.qrc)
 
-target_link_libraries(gdlauncher PRIVATE Qt6::Core Qt6::Widgets Qt6::Network ZLIB::ZLIB miniz)
+target_link_libraries(gdlauncher PRIVATE Qt6::Core Qt6::Widgets Qt6::Network Qt6::Concurrent ZLIB::ZLIB miniz)
 target_include_directories(gdlauncher PRIVATE src)
+
+if(GDLAUNCHER_DEBUG_LOGGING)
+    target_compile_definitions(gdlauncher PRIVATE GDLAUNCHER_DEBUG_LOGGING)
+    message(STATUS "GDLauncher: verbose debug logging ENABLED")
+endif()
 
 if(WIN32)
     set_target_properties(gdlauncher PROPERTIES WIN32_EXECUTABLE ON)

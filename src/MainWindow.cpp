@@ -12,6 +12,7 @@
 #include "ui/ChangelogDialog.h"
 #include "ui/Theme.h"
 #include "ui/Animations.h"
+#include "DebugLog.h"
 
 #include <QWidget>
 #include <QVBoxLayout>
@@ -42,7 +43,7 @@ static QString formatSize(qint64 bytes) {
 }
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
-    setWindowTitle("GDLauncher");
+    setWindowTitle(kDebugLoggingEnabled ? "GDLauncher (Debug)" : "GDLauncher");
     setWindowIcon(QIcon(":/icon.png"));
     resize(1000, 750);
     setMinimumSize(700, 500);
@@ -111,7 +112,42 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 
     m_launcher = new GameLauncher(this, this);
     m_updateChecker = new UpdateChecker(this, this);
+    // Owned here (not by DownloadsDialog) so an in-flight download/extraction survives the
+    // dialog being closed and reopened.
+    m_versionManager = new VersionManager(this);
     m_logPipe = new LogPipeServer(this);
+
+    connect(m_versionManager, &VersionManager::downloadFinished, this, [this](const QString &id, bool success, const QString &message) {
+        if (success) m_statusLabel->setText(QString("Finished installing %1").arg(id));
+        else if (message != "Cancelled") m_statusLabel->setText(QString("Download failed: %1").arg(message));
+        else m_statusLabel->setText(QString("Cancelled %1").arg(id));
+    });
+    connect(m_versionManager, &VersionManager::remoteVersionsReady, this, [](const QJsonArray &versions) {
+        GD_DEBUG_LOG("versions", QString("Fetched %1 remote version(s)").arg(versions.size()));
+        for (const QJsonValue &v : versions) {
+            const QJsonObject o = v.toObject();
+            GD_DEBUG_LOG("versions", QString("  %1 -- installed=%2")
+                .arg(o.value("id").toString(), o.value("isInstalled").toBool() ? "yes" : "no"));
+        }
+    });
+    connect(m_versionManager, &VersionManager::downloadStarted, this, [](const QString &id) {
+        GD_DEBUG_LOG("download", QString("Started downloading %1").arg(id));
+    });
+    connect(m_versionManager, &VersionManager::downloadProgress, this, [](const QString &id, qint64 recv, qint64 total) {
+        if (total > 0 && recv == total) GD_DEBUG_LOG("download", QString("%1 download complete (%2 bytes)").arg(id).arg(total));
+    });
+    connect(m_versionManager, &VersionManager::extractionStarted, this, [](const QString &id) {
+        GD_DEBUG_LOG("extract", QString("Extracting %1").arg(id));
+    });
+    connect(m_versionManager, &VersionManager::downloadFinished, this, [](const QString &id, bool success, const QString &message) {
+        GD_DEBUG_LOG("download", QString("%1 finished: success=%2 message=%3").arg(id, success ? "yes" : "no", message));
+    });
+
+    if constexpr (kDebugLoggingEnabled) {
+        connect(&DebugLog::instance(), &DebugLog::message, this, &MainWindow::appendLog);
+        GD_DEBUG_LOG("startup", QString("GDLauncher %1 starting (debug logging build)").arg(m_appVersion));
+        GD_DEBUG_LOG("startup", QString("Data directory: %1").arg(Settings::baseDir()));
+    }
 
     connect(m_table, &QTableWidget::itemSelectionChanged, this, &MainWindow::onSelectionChanged);
     connect(m_launchBtn, &QPushButton::clicked, this, &MainWindow::onLaunch);
@@ -148,6 +184,14 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 
     QTimer::singleShot(3000, this, [this]() { m_updateChecker->check(false); });
     QTimer::singleShot(0, this, &MainWindow::runStartupChecks);
+
+    if constexpr (kDebugLoggingEnabled) {
+        // A debug build's whole point is visibility, so open the live log console
+        // immediately rather than making the user dig for a button to see it.
+        m_consoleWindow = new ConsoleWindow(nullptr);
+        m_consoleWindow->show();
+        GD_DEBUG_LOG("startup", "Live log console opened.");
+    }
 }
 
 void MainWindow::runStartupChecks() {
@@ -194,6 +238,7 @@ QString MainWindow::selectedInstanceName() const { return m_selectedInstance; }
 
 void MainWindow::refreshInstances() {
     m_instances = InstanceManager::getInstances();
+    GD_DEBUG_LOG("instances", QString("Detected %1 instance(s)").arg(m_instances.size()));
     m_table->setRowCount(m_instances.size());
     for (int i = 0; i < m_instances.size(); ++i) {
         const InstanceInfo &inst = m_instances[i];
@@ -233,6 +278,7 @@ void MainWindow::onSelectionChanged() {
 
 void MainWindow::onLaunch() {
     if (m_selectedInstance.isEmpty()) return;
+    GD_DEBUG_LOG("launch", QString("Launch requested for instance '%1'").arg(m_selectedInstance));
     setUiEnabled(false);
     m_progressBar->setAnimatedValue(10);
     m_statusLabel->setText(QString("Preparing %1...").arg(m_selectedInstance));
@@ -243,6 +289,9 @@ void MainWindow::onCreate() {
     InstanceDialog dlg(this, false);
     if (dlg.exec() != QDialog::Accepted) return;
     const InstanceSaveResult res = InstanceManager::createInstance(dlg.data());
+    GD_DEBUG_LOG("instances", QString("Create '%1': success=%2%3")
+        .arg(dlg.data().value("name").toString(), res.success ? "yes" : "no",
+             res.success ? "" : (" error=" + res.error)));
     if (res.success) {
         m_selectedInstance = dlg.data().value("name").toString();
         refreshInstances();
@@ -281,6 +330,7 @@ void MainWindow::onDelete() {
     if (QMessageBox::question(this, "Delete instance",
             QString("Are you sure you want to move '%1' to Trash?").arg(m_selectedInstance)) != QMessageBox::Yes)
         return;
+    GD_DEBUG_LOG("instances", QString("Deleting instance '%1'").arg(m_selectedInstance));
     const InstanceSaveResult res = InstanceManager::deleteInstance(m_selectedInstance);
     if (res.success) {
         m_selectedInstance.clear();
@@ -304,7 +354,7 @@ void MainWindow::onSettings() {
 }
 
 void MainWindow::onDownloads() {
-    DownloadsDialog dlg(this);
+    DownloadsDialog dlg(this, m_versionManager);
     dlg.exec();
     refreshInstances();
 }

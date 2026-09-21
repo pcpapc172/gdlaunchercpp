@@ -11,6 +11,8 @@
 #include <QNetworkRequest>
 #include <QDebug>
 #include <QDateTime>
+#include <QtConcurrent/QtConcurrent>
+#include <QFutureWatcher>
 #include <functional>
 #include <cstring>
 
@@ -20,7 +22,14 @@ extern "C" {
 
 static const char *REMOTE_VERSIONS_URL = "http://api.pcpapc172.ir/archive/versions.json";
 
-VersionManager::VersionManager(QObject *parent) : QObject(parent) {}
+VersionManager::VersionManager(QObject *parent) : QObject(parent) {
+    // extractionProgress is emitted from a background thread (see downloadVersion); Qt queues
+    // it onto this object's own thread automatically since the receiver lives here, so it's
+    // safe to update m_operations (which the UI thread also reads) only from this slot.
+    connect(this, &VersionManager::extractionProgress, this, [this](const QString &id, qint64 cur, qint64 tot) {
+        if (auto it = m_operations.find(id); it != m_operations.end()) { it->current = cur; it->total = tot; }
+    });
+}
 
 QVector<LocalVersion> VersionManager::getVersions() {
     QVector<LocalVersion> out;
@@ -157,37 +166,123 @@ void VersionManager::resolveSizes(const QJsonArray &versions) {
     }
 }
 
-static bool extractZip(const QString &zipPath, const QString &destDir, QString *error) {
+namespace {
+
+struct ExtractResult {
+    bool ok = false;
+    bool cancelled = false;
+    QString error;
+};
+
+struct WriteCallbackCtx {
+    QFile *outFile = nullptr;
+    std::atomic<bool> *cancelFlag = nullptr;
+    qint64 cumulative = 0;
+    qint64 total = 0;
+    QString id;
+    VersionManager *manager = nullptr;
+};
+
+// miniz calls this per chunk as it inflates a file, so we get real byte-level
+// progress (and a cancellation point) instead of jumping 0% -> 100% per file,
+// which matters when an archive is mostly one or two huge files.
+size_t extractWriteCallback(void *pOpaque, mz_uint64 /*fileOfs*/, const void *pBuf, size_t n) {
+    auto *ctx = static_cast<WriteCallbackCtx *>(pOpaque);
+    if (ctx->cancelFlag->load()) return 0; // returning short tells miniz to abort
+    const qint64 written = ctx->outFile->write(static_cast<const char *>(pBuf), static_cast<qint64>(n));
+    if (written != static_cast<qint64>(n)) return 0;
+    ctx->cumulative += static_cast<qint64>(n);
+    if (ctx->manager) emit ctx->manager->extractionProgress(ctx->id, ctx->cumulative, ctx->total);
+    return n;
+}
+
+// Runs entirely on a background thread (see QtConcurrent::run below in downloadVersion) so the
+// UI stays responsive for large archives; `manager`/`id` are only used to emit progress signals,
+// which Qt safely queues back onto the manager's own (main) thread.
+ExtractResult extractZip(const QString &zipPath, const QString &destDir, std::shared_ptr<std::atomic<bool>> cancelFlag,
+                          VersionManager *manager, const QString &id) {
+    ExtractResult result;
+
     mz_zip_archive zip;
     memset(&zip, 0, sizeof(zip));
     const QByteArray zipPathBytes = zipPath.toLocal8Bit();
     if (!mz_zip_reader_init_file(&zip, zipPathBytes.constData(), 0)) {
-        if (error) *error = "Failed to open zip archive";
-        return false;
+        result.error = "Failed to open zip archive";
+        return result;
     }
+
     const mz_uint numFiles = mz_zip_reader_get_num_files(&zip);
-    QDir().mkpath(destDir);
-    bool ok = true;
+    qint64 totalUncompressed = 0;
     for (mz_uint i = 0; i < numFiles; ++i) {
+        mz_zip_archive_file_stat stat;
+        if (mz_zip_reader_file_stat(&zip, i, &stat) && !mz_zip_reader_is_file_a_directory(&zip, i))
+            totalUncompressed += static_cast<qint64>(stat.m_uncomp_size);
+    }
+
+    QDir().mkpath(destDir);
+    qint64 cumulative = 0;
+    bool ok = true;
+
+    for (mz_uint i = 0; i < numFiles; ++i) {
+        if (cancelFlag->load()) { result.cancelled = true; ok = false; break; }
+
         mz_zip_archive_file_stat stat;
         if (!mz_zip_reader_file_stat(&zip, i, &stat)) { ok = false; break; }
         QString name = QString::fromUtf8(stat.m_filename);
         name.replace('\\', '/');
         const QString outPath = destDir + "/" + name;
+
         if (mz_zip_reader_is_file_a_directory(&zip, i)) {
             QDir().mkpath(outPath);
             continue;
         }
+
         QDir().mkpath(QFileInfo(outPath).path());
-        const QByteArray outPathBytes = outPath.toLocal8Bit();
-        if (!mz_zip_reader_extract_to_file(&zip, i, outPathBytes.constData(), 0)) {
+        QFile outFile(outPath);
+        if (!outFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) { ok = false; break; }
+
+        WriteCallbackCtx ctx;
+        ctx.outFile = &outFile;
+        ctx.cancelFlag = cancelFlag.get();
+        ctx.cumulative = cumulative;
+        ctx.total = totalUncompressed;
+        ctx.id = id;
+        ctx.manager = manager;
+
+        const mz_bool extracted = mz_zip_reader_extract_to_callback(&zip, i, extractWriteCallback, &ctx, 0);
+        outFile.close();
+        cumulative = ctx.cumulative;
+
+        if (!extracted) {
             ok = false;
+            if (cancelFlag->load()) result.cancelled = true;
             break;
         }
     }
+
     mz_zip_reader_end(&zip);
-    if (!ok && error) *error = "Failed to extract archive";
-    return ok;
+    result.ok = ok;
+    if (!ok && !result.cancelled) result.error = "Failed to extract archive";
+    if (result.cancelled) QDir(destDir).removeRecursively();
+    return result;
+}
+
+} // namespace
+
+void VersionManager::cancelOperation(const QString &id) {
+    if (QNetworkReply *reply = m_activeReplies.value(id)) {
+        reply->abort();
+        return;
+    }
+    if (auto flag = m_cancelFlags.value(id)) flag->store(true);
+}
+
+bool VersionManager::hasActiveOperation(const QString &id) const {
+    return m_operations.contains(id);
+}
+
+VersionOperation VersionManager::activeOperation(const QString &id) const {
+    return m_operations.value(id);
 }
 
 void VersionManager::downloadVersion(const QJsonObject &version) {
@@ -195,12 +290,16 @@ void VersionManager::downloadVersion(const QJsonObject &version) {
     const QString versionPath = version.value("path").toString();
     const QString url = version.value("url").toString();
 
+    if (m_operations.contains(id)) return; // already downloading/extracting
+
+    m_operations[id] = VersionOperation{VersionOperation::Phase::Downloading, 0, 0};
     emit downloadStarted(id);
 
     const QString tmpZip = QStandardPaths::writableLocation(QStandardPaths::TempLocation) +
                             "/" + QString(id).replace('/', '_') + ".zip";
     QFile *outFile = new QFile(tmpZip, this);
     if (!outFile->open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        m_operations.remove(id);
         emit downloadFinished(id, false, "Failed to open temp file for download");
         delete outFile;
         return;
@@ -208,47 +307,65 @@ void VersionManager::downloadVersion(const QJsonObject &version) {
 
     QNetworkRequest req{QUrl(url)};
     QNetworkReply *reply = m_net.get(req);
+    m_activeReplies[id] = reply;
 
     connect(reply, &QNetworkReply::readyRead, this, [reply, outFile]() {
         outFile->write(reply->readAll());
     });
     connect(reply, &QNetworkReply::downloadProgress, this, [this, id](qint64 recv, qint64 total) {
+        if (auto it = m_operations.find(id); it != m_operations.end()) { it->current = recv; it->total = total; }
         emit downloadProgress(id, recv, total);
     });
     connect(reply, &QNetworkReply::finished, this, [this, reply, outFile, id, versionPath, tmpZip]() {
         outFile->close();
+        m_activeReplies.remove(id);
+        const bool wasAborted = reply->error() == QNetworkReply::OperationCanceledError;
         reply->deleteLater();
+
         if (reply->error() != QNetworkReply::NoError) {
-            emit downloadFinished(id, false, reply->errorString());
             outFile->deleteLater();
+            QFile::remove(tmpZip);
+            m_operations.remove(id);
+            emit downloadFinished(id, false, wasAborted ? "Cancelled" : reply->errorString());
             return;
         }
+        outFile->deleteLater();
 
         const QString extractPath = Settings::versionsDir() + "/" + versionPath;
         QDir().mkpath(Settings::versionsDir() + "/" + versionPath.split('/').first());
         if (QFileInfo::exists(extractPath)) QDir(extractPath).removeRecursively();
 
-        QString err;
-        const bool ok = extractZip(tmpZip, extractPath, &err);
-        QFile::remove(tmpZip);
-        outFile->deleteLater();
+        auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
+        m_cancelFlags[id] = cancelFlag;
+        m_operations[id] = VersionOperation{VersionOperation::Phase::Extracting, 0, 0};
+        emit extractionStarted(id);
 
-        if (!ok) {
-            emit downloadFinished(id, false, err);
-            return;
-        }
+        auto *watcher = new QFutureWatcher<ExtractResult>(this);
+        connect(watcher, &QFutureWatcher<ExtractResult>::finished, this, [this, watcher, id, extractPath, tmpZip]() {
+            const ExtractResult result = watcher->result();
+            watcher->deleteLater();
+            m_cancelFlags.remove(id);
+            m_operations.remove(id);
+            QFile::remove(tmpZip);
 
-        const QString versionJsonPath = extractPath + "/version.json";
-        if (!QFileInfo::exists(versionJsonPath)) {
-            QFile vf(versionJsonPath);
-            if (vf.open(QIODevice::WriteOnly)) {
-                QJsonObject defaults;
-                defaults["executable"] = "GeometryDash.exe";
-                defaults["steam_emulator"] = "SmartSteamEmu.exe";
-                vf.write(QJsonDocument(defaults).toJson(QJsonDocument::Indented));
+            if (!result.ok) {
+                emit downloadFinished(id, false, result.cancelled ? "Cancelled" : result.error);
+                return;
             }
-        }
 
-        emit downloadFinished(id, true, QString());
+            const QString versionJsonPath = extractPath + "/version.json";
+            if (!QFileInfo::exists(versionJsonPath)) {
+                QFile vf(versionJsonPath);
+                if (vf.open(QIODevice::WriteOnly)) {
+                    QJsonObject defaults;
+                    defaults["executable"] = "GeometryDash.exe";
+                    defaults["steam_emulator"] = "SmartSteamEmu.exe";
+                    vf.write(QJsonDocument(defaults).toJson(QJsonDocument::Indented));
+                }
+            }
+
+            emit downloadFinished(id, true, QString());
+        });
+        watcher->setFuture(QtConcurrent::run(extractZip, tmpZip, extractPath, cancelFlag, this, id));
     });
 }
