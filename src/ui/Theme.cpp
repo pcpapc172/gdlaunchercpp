@@ -25,12 +25,18 @@ QString Theme::styleSheet(Kind kind) {
 
     return QString(R"(
         QWidget {
-            background-color: %1;
             color: %3;
             font-family: 'Segoe UI', 'Cantarell', sans-serif;
             font-size: 13px;
         }
+        /* Only top-level windows and explicitly named containers paint a
+           background; everything else (labels, checkboxes, panels' own
+           children, ...) stays transparent so it shows its parent's
+           background instead of a mismatched opaque rectangle. */
         QMainWindow, QDialog { background-color: %1; }
+        QLabel, QCheckBox, QRadioButton, QGroupBox, QScrollArea, QScrollArea > QWidget > QWidget {
+            background-color: transparent;
+        }
         #panel, QTableWidget, QListWidget, QPlainTextEdit, QFrame#card {
             background-color: %2;
             border: 1px solid %5;
