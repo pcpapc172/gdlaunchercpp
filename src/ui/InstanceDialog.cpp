@@ -266,6 +266,14 @@ void InstanceDialog::loadVersionDefaults() {
     m_steamEmuCheck->setChecked(defaults.useSteamEmu);
     m_skipRestartCheck->setChecked(defaults.skipRestartCheck);
     updateGeodeLogUI();
+
+    if (!defaults.parseError.isEmpty()) {
+        QMessageBox::warning(this, "Invalid version.json",
+            QString("This version's version.json has a syntax error, so its settings "
+                    "(Geode compatible, use MegaHack, etc.) could not be read -- the checkboxes "
+                    "below are just the launcher's built-in defaults, not what that file actually says.\n\n%1")
+                .arg(defaults.parseError));
+    }
 }
 
 void InstanceDialog::onSave() {

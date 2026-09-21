@@ -25,6 +25,10 @@ struct VersionDefaults {
     bool useMegaHack = true;
     bool useSteamEmu = false;
     bool skipRestartCheck = false;
+    // Set when this version's version.json exists but failed to parse (e.g. a missing or
+    // trailing comma) -- every field above is then just the built-in default, not a real
+    // reflection of that file, so the caller should tell the user rather than fail silently.
+    QString parseError;
 };
 
 // A version download/extraction in flight, keyed by version id. VersionManager is owned by

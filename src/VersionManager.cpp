@@ -1,5 +1,6 @@
 #include "VersionManager.h"
 #include "Settings.h"
+#include "DebugLog.h"
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -74,11 +75,22 @@ VersionDefaults VersionManager::getVersionDefaults(const QString &versionPath) {
     // geode_compatible field -- better than silently defaulting to false for every one of them.
     d.geodeCompatible = versionPath.contains("geode", Qt::CaseInsensitive);
 
-    QFile f(Settings::versionsDir() + "/" + versionPath + "/version.json");
+    const QString versionJsonPath = Settings::versionsDir() + "/" + versionPath + "/version.json";
+    QFile f(versionJsonPath);
     if (f.open(QIODevice::ReadOnly)) {
+        const QByteArray raw = f.readAll();
         QJsonParseError err;
-        QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
-        if (err.error == QJsonParseError::NoError && doc.isObject()) {
+        QJsonDocument doc = QJsonDocument::fromJson(raw, &err);
+        if (err.error != QJsonParseError::NoError || !doc.isObject()) {
+            // A malformed version.json (e.g. a missing/trailing comma) used to fail silently
+            // here and every field would fall back to its built-in default with no
+            // indication why -- surface it instead of guessing quietly.
+            const QString msg = QString("%1 is not valid JSON (%2 at offset %3); ignoring it and using built-in defaults.")
+                .arg(versionJsonPath, err.errorString()).arg(err.offset);
+            qWarning().noquote() << "[VersionManager]" << msg;
+            GD_DEBUG_LOG("versions", msg);
+            d.parseError = QString("%1: %2 (offset %3)").arg(versionJsonPath, err.errorString()).arg(err.offset);
+        } else {
             const QJsonObject o = doc.object();
             if (o.contains("executable")) d.executable = o["executable"].toString();
             if (o.contains("steam_emulator")) d.steamEmulator = o["steam_emulator"].toString();
