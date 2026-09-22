@@ -176,8 +176,17 @@ set(CPACK_NSIS_EXECUTABLES_DIRECTORY "bin")
 set(CPACK_NSIS_INSTALLED_ICON_NAME "bin\\\\gdlauncher.exe")
 set(CPACK_NSIS_MUI_ICON "${CMAKE_SOURCE_DIR}/resources/icon.ico")
 set(CPACK_NSIS_MUI_UNIICON "${CMAKE_SOURCE_DIR}/resources/icon.ico")
-set(CPACK_NSIS_CREATE_ICONS_EXTRA "CreateShortCut '$SMPROGRAMS\\\\$STARTMENU_FOLDER\\\\GDLauncher.lnk' '$INSTDIR\\\\bin\\\\gdlauncher.exe'")
-set(CPACK_NSIS_DELETE_ICONS_EXTRA "Delete '$SMPROGRAMS\\\\$STARTMENU_FOLDER\\\\GDLauncher.lnk'")
+# Shortcut creation itself now comes from CPACK_PACKAGE_EXECUTABLES below (generator-agnostic,
+# and the only thing WiX honors) -- a manual CreateShortCut/_EXTRA script here would just
+# duplicate the one CPack's own NSIS template already generates from that variable.
+
+# Start Menu shortcut generation is generator-agnostic in CPack -- WiX builds its Start Menu
+# component entirely from this variable (no override equivalent to NSIS's *_EXTRA scripts
+# below), so leaving it unset meant the .msi installed the exe with no shortcut, no Start Menu
+# entry, nothing. NSIS still got one because of CPACK_NSIS_CREATE_ICONS_EXTRA, which masked the
+# same gap there.
+set(CPACK_PACKAGE_EXECUTABLES "gdlauncher" "GDLauncher")
+set(CPACK_CREATE_DESKTOP_LINKS "gdlauncher")
 
 # Windows MSI (WiX)
 set(CPACK_WIX_UPGRADE_GUID "6E6F5A4F-6D53-4E8E-9E30-6D6C0D7B7C63")
