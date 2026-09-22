@@ -44,6 +44,10 @@ jobs:
 
       - name: Create and push new tag
         run: |
-          git tag "${{ inputs.new_tag }}" HEAD
-          git push origin "${{ inputs.new_tag }}"
+          # actions/checkout@v4 fetches +refs/tags/*:refs/tags/* on checkout regardless of what
+          # ref is checked out, so even after the remote tag was just deleted above, the OLD tag
+          # object is still sitting in the local repo here -- plain `git tag` refuses to
+          # overwrite it. Force-create locally, then force-push, to actually replace it.
+          git tag -f "${{ inputs.new_tag }}" HEAD
+          git push --force origin "${{ inputs.new_tag }}"
           echo "Pushed ${{ inputs.new_tag }} at $(git rev-parse HEAD) -- this should trigger release.yml."
