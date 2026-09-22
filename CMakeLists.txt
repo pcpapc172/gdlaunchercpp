@@ -1,5 +1,20 @@
 cmake_minimum_required(VERSION 3.16)
-project(GDLauncher VERSION 2.1.5 LANGUAGES CXX C)
+
+# The VERSION file is the single source of truth for the app's base version number -- CI reads
+# it too (for the "number-commit" scheme on regular builds), so it can't just live as a literal
+# here where only CMake would see it.
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" GDLAUNCHER_BASE_VERSION LIMIT_COUNT 1)
+string(STRIP "${GDLAUNCHER_BASE_VERSION}" GDLAUNCHER_BASE_VERSION)
+
+project(GDLauncher VERSION ${GDLAUNCHER_BASE_VERSION} LANGUAGES CXX C)
+
+# The version actually baked into the app (QCoreApplication::applicationVersion(), and what
+# CPack names packages after). Defaults to the plain VERSION-file number for a local dev build;
+# CI overrides it with -DGDLAUNCHER_APP_VERSION=... -- "<version>-<short-sha>" for a regular
+# per-commit build, or just the tag's version number for a tagged release.
+if(NOT GDLAUNCHER_APP_VERSION)
+    set(GDLAUNCHER_APP_VERSION "${GDLAUNCHER_BASE_VERSION}")
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -92,6 +107,8 @@ qt_add_executable(gdlauncher ${APP_SOURCES} ${APP_HEADERS} resources/resources.q
 
 target_link_libraries(gdlauncher PRIVATE Qt6::Core Qt6::Widgets Qt6::Network Qt6::Concurrent ZLIB::ZLIB miniz)
 target_include_directories(gdlauncher PRIVATE src)
+target_compile_definitions(gdlauncher PRIVATE GDLAUNCHER_APP_VERSION="${GDLAUNCHER_APP_VERSION}")
+message(STATUS "GDLauncher: app version = ${GDLAUNCHER_APP_VERSION}")
 
 if(GDLAUNCHER_DEBUG_LOGGING)
     target_compile_definitions(gdlauncher PRIVATE GDLAUNCHER_DEBUG_LOGGING)
@@ -123,7 +140,7 @@ endif()
 # installing via apt/dnf/an installer actually expect.
 set(CPACK_PACKAGE_NAME "gdlauncher")
 set(CPACK_PACKAGE_VENDOR "pcpapc172")
-set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
+set(CPACK_PACKAGE_VERSION ${GDLAUNCHER_APP_VERSION})
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Game Instance Launcher for Geometry Dash")
 set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/pcpapc172/gdlaunchercpp")
 set(CPACK_PACKAGE_CONTACT "pcpapc172")
@@ -137,13 +154,13 @@ set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/resources/LICENSE.txt")
 set(CPACK_DEBIAN_PACKAGE_MAINTAINER "pcpapc172")
 set(CPACK_DEBIAN_PACKAGE_SECTION "games")
 set(CPACK_DEBIAN_PACKAGE_DEPENDS "libqt6core6, libqt6widgets6, libqt6network6, libqt6concurrent6, zlib1g, wine")
-set(CPACK_DEBIAN_FILE_NAME "gdlauncher-${PROJECT_VERSION}-amd64.deb")
+set(CPACK_DEBIAN_FILE_NAME "gdlauncher-${GDLAUNCHER_APP_VERSION}-amd64.deb")
 
 # Fedora/RHEL (.rpm)
 set(CPACK_RPM_PACKAGE_LICENSE "MIT")
 set(CPACK_RPM_PACKAGE_GROUP "Amusements/Games")
 set(CPACK_RPM_PACKAGE_REQUIRES "qt6-qtbase, zlib, wine")
-set(CPACK_RPM_FILE_NAME "gdlauncher-${PROJECT_VERSION}-1.x86_64.rpm")
+set(CPACK_RPM_FILE_NAME "gdlauncher-${GDLAUNCHER_APP_VERSION}-1.x86_64.rpm")
 
 # Windows NSIS installer (.exe)
 set(CPACK_NSIS_PACKAGE_NAME "GDLauncher")

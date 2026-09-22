@@ -9,7 +9,10 @@ int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
     QCoreApplication::setOrganizationName("pcpapc172");
     QCoreApplication::setApplicationName("GDLauncher");
-    QCoreApplication::setApplicationVersion("2.1.5");
+    // GDLAUNCHER_APP_VERSION is baked in at build time (see CMakeLists.txt) from the VERSION
+    // file, overridden by CI: "<version>-<short-sha>" for a regular per-commit build, or just
+    // the tag's version number for a tagged release. Never hardcode a version string here.
+    QCoreApplication::setApplicationVersion(GDLAUNCHER_APP_VERSION);
 
     // Fusion renders our QSS identically across platforms instead of picking up
     // each OS's native widget chrome, which is what keeps the look consistent.

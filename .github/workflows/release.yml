@@ -18,8 +18,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y qt6-base-dev zlib1g-dev build-essential cmake ninja-build rpm
 
+      # A real tagged release: just the version number (the tag minus its leading "v"), no
+      # commit suffix.
+      - name: Compute app version
+        run: echo "APP_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGDLAUNCHER_APP_VERSION="$APP_VERSION"
 
       - name: Build
         run: cmake --build build -j"$(nproc)"
@@ -63,8 +68,14 @@ jobs:
           C:\vcpkg\bootstrap-vcpkg.bat
           C:\vcpkg\vcpkg.exe install zlib:x64-windows
 
+      # A real tagged release: just the version number (the tag minus its leading "v"), no
+      # commit suffix.
+      - name: Compute app version
+        run: echo "APP_VERSION=$("${{ github.ref_name }}" -replace '^v', '')" >> $env:GITHUB_ENV
+        shell: pwsh
+
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DGDLAUNCHER_APP_VERSION="$env:APP_VERSION" -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows
 
       - name: Build
         run: cmake --build build --config Release -j

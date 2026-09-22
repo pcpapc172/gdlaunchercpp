@@ -110,7 +110,10 @@ void UpdateChecker::check(bool isManual) {
         const QJsonObject data = QJsonDocument::fromJson(reply->readAll()).object();
         QString tag = data.value("tag_name").toString();
         const QString latestVersion = tag.startsWith('v') ? tag.mid(1) : tag;
-        const QString currentVersion = QCoreApplication::applicationVersion();
+        // A per-commit CI build's version is "<number>-<short-sha>" (see main.cpp); strip the
+        // suffix before comparing so QString::toInt() on the last segment (e.g. "5-a1b2c3d")
+        // doesn't silently parse as 0 in versionGreater().
+        const QString currentVersion = QCoreApplication::applicationVersion().section('-', 0, 0);
         GD_DEBUG_LOG("update", QString("Latest release: %1 (current: %2)").arg(latestVersion, currentVersion));
 
         if (!versionGreater(latestVersion, currentVersion)) {

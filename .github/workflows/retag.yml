@@ -1,0 +1,49 @@
+# TEMPORARY WORKFLOW -- delete this file once it's been used.
+#
+# One-off helper to clean up the stale v1.0.0 tag (it points at a commit from before the
+# WiX/version-numbering fixes landed) and cut a fresh tag, which triggers release.yml on the
+# new tag and actually exercises the current release pipeline end to end.
+name: Retag Release (temporary)
+
+on:
+  workflow_dispatch:
+    inputs:
+      new_tag:
+        description: 'New tag to create and push (e.g. v1.0.1)'
+        required: true
+      stale_tag:
+        description: 'Stale tag to delete first (leave blank to skip deleting)'
+        required: false
+        default: 'v1.0.0'
+      ref:
+        description: 'Ref to tag (branch name or commit SHA). Defaults to whatever ref this workflow run itself is on.'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  retag:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.ref != '' && inputs.ref || github.ref }}
+
+      - name: Delete stale tag
+        if: inputs.stale_tag != ''
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/${{ inputs.stale_tag }}" > /dev/null 2>&1; then
+            echo "Deleting stale tag ${{ inputs.stale_tag }} from origin"
+            git push origin ":refs/tags/${{ inputs.stale_tag }}"
+          else
+            echo "Tag ${{ inputs.stale_tag }} doesn't exist on origin, nothing to delete."
+          fi
+
+      - name: Create and push new tag
+        run: |
+          git tag "${{ inputs.new_tag }}" HEAD
+          git push origin "${{ inputs.new_tag }}"
+          echo "Pushed ${{ inputs.new_tag }} at $(git rev-parse HEAD) -- this should trigger release.yml."
