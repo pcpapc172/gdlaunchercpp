@@ -99,19 +99,52 @@ jobs:
 
       - name: Package (NSIS .exe / WiX .msi)
         working-directory: build
+        # A packaging failure here (e.g. a WiX config issue) shouldn't sink the whole release --
+        # the zip built above is still a complete, valid artifact on its own. The ::error::
+        # annotations below still surface in the job log/summary either way.
+        continue-on-error: true
         run: |
           $env:PATH += ";C:\Program Files (x86)\WiX Toolset v3.11\bin"
           # CPACK_INSTALLED_DIRECTORIES packages this directory's contents verbatim into bin/,
           # since the exe alone (via install(TARGETS)) is missing the Qt/zlib DLLs that
           # windeployqt just deployed alongside it above -- those aren't part of any CMake
           # install() rule.
-          cpack -D "CPACK_INSTALLED_DIRECTORIES=$pwd\Release;bin" -G "NSIS;WIX"
-          Get-ChildItem *.exe | Rename-Item -NewName "gdlauncher-windows-x86_64-installer.exe"
-          Get-ChildItem *.msi | Rename-Item -NewName "gdlauncher-windows-x86_64.msi"
-          Move-Item gdlauncher-windows-x86_64-installer.exe, gdlauncher-windows-x86_64.msi ..\dist\
+          $installArg = "CPACK_INSTALLED_DIRECTORIES=$pwd\Release;bin"
+
+          # Run each generator separately and move its output the moment it exists, so a
+          # failure in one (e.g. WiX license/config issues) can't also lose the other's
+          # already-built package -- a single combined "-G NSIS;WIX" call with one Move-Item
+          # at the end did exactly that.
+          $failed = $false
+
+          cpack -D $installArg -G NSIS
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::NSIS packaging failed (exit $LASTEXITCODE)"
+            $failed = $true
+          } else {
+            $exe = Get-ChildItem *.exe | Select-Object -First 1
+            if ($exe) { Move-Item $exe.FullName ..\dist\gdlauncher-windows-x86_64-installer.exe }
+            else { Write-Host "::error::cpack reported success but no .exe was found"; $failed = $true }
+          }
+
+          cpack -D $installArg -G WIX
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::WiX packaging failed (exit $LASTEXITCODE)"
+            $failed = $true
+          } else {
+            $msi = Get-ChildItem *.msi | Select-Object -First 1
+            if ($msi) { Move-Item $msi.FullName ..\dist\gdlauncher-windows-x86_64.msi }
+            else { Write-Host "::error::cpack reported success but no .msi was found"; $failed = $true }
+          }
+
+          if ($failed) { exit 1 }
         shell: pwsh
 
       - name: Upload artifact
+        # Runs even if NSIS/WiX packaging failed above, so the zip (already moved into dist/
+        # before that step) still gets published instead of the whole platform's release
+        # silently disappearing over an installer-only problem.
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: release-windows

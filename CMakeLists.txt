@@ -127,7 +127,11 @@ set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Game Instance Launcher for Geometry Dash")
 set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/pcpapc172/gdlaunchercpp")
 set(CPACK_PACKAGE_CONTACT "pcpapc172")
-set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE")
+# CPack's WiX generator specifically requires the license file to have a recognized extension
+# (.txt or .rtf) -- our repo-root LICENSE file (no extension, standard for GitHub license
+# detection) makes WiX fail with "unsupported WiX License file extension ''" even though NSIS
+# and DEB/RPM tolerate it fine. Point CPack at a .txt copy instead of renaming the real one.
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/resources/LICENSE.txt")
 
 # Debian/Ubuntu (.deb)
 set(CPACK_DEBIAN_PACKAGE_MAINTAINER "pcpapc172")
