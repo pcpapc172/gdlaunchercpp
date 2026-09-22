@@ -226,6 +226,32 @@ void MainWindow::runStartupChecks() {
 }
 
 void MainWindow::closeEvent(QCloseEvent *event) {
+    // The instance->save-folder sync-back only happens once GameLauncher detects the game
+    // process has exited -- closing the app while it's still running skips that entirely, so
+    // whatever the player just did in-game never makes it back into the instance's save data.
+    // Nothing was stopping that before: the window just closed, GameLauncher (and its
+    // still-running QProcess/monitor timer) got destroyed along with it, and any in-progress
+    // sync got cut off mid-copy.
+    if (m_launcher && m_launcher->isSyncing()) {
+        QMessageBox::warning(this, "Sync in Progress",
+            "GDLauncher is currently syncing save data back from the game. Please wait for it "
+            "to finish before closing the launcher.");
+        event->ignore();
+        return;
+    }
+    if (m_launcher && m_launcher->isGameRunning()) {
+        const int response = QMessageBox::warning(this, "Game Still Running",
+            "Geometry Dash is still running for the selected instance. Closing GDLauncher now "
+            "will prevent your save data from being synced back when the game exits.\n\n"
+            "Quit anyway?",
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (response != QMessageBox::Yes) {
+            event->ignore();
+            return;
+        }
+        GD_DEBUG_LOG("ui", "Main window closing while game is still running (user confirmed).");
+    }
+
     // ConsoleWindow is a separate top-level widget with no parent (so it can be shown/hidden
     // independently), so closing the main window alone leaves it open -- and since it's still a
     // visible top-level window, Qt's quitOnLastWindowClosed never fires and the process lingers.
