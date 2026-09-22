@@ -141,6 +141,11 @@ endif()
 set(CPACK_PACKAGE_NAME "gdlauncher")
 set(CPACK_PACKAGE_VENDOR "pcpapc172")
 set(CPACK_PACKAGE_VERSION ${GDLAUNCHER_APP_VERSION})
+# CPack defaults this to "<name> <version>" (e.g. "gdlauncher 1.0.0") unless told otherwise,
+# which would put every release in its own Program Files folder instead of upgrading in place --
+# NSIS's uninstall-before-install and WiX's upgrade GUID both only recognize a prior install
+# when it's at the SAME path. Keep it fixed across versions so updates actually update.
+set(CPACK_PACKAGE_INSTALL_DIRECTORY "GDLauncher")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Game Instance Launcher for Geometry Dash")
 set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/pcpapc172/gdlaunchercpp")
 set(CPACK_PACKAGE_CONTACT "pcpapc172")
