@@ -232,10 +232,13 @@ void MainWindow::closeEvent(QCloseEvent *event) {
     // Nothing was stopping that before: the window just closed, GameLauncher (and its
     // still-running QProcess/monitor timer) got destroyed along with it, and any in-progress
     // sync got cut off mid-copy.
-    if (m_launcher && m_launcher->isSyncing()) {
-        QMessageBox::warning(this, "Sync in Progress",
-            "GDLauncher is currently syncing save data back from the game. Please wait for it "
-            "to finish before closing the launcher.");
+    if (m_launcher && (m_launcher->isLaunching() || m_launcher->isSyncing())) {
+        QMessageBox::warning(this, m_launcher->isLaunching() ? "Launch in Progress" : "Sync in Progress",
+            m_launcher->isLaunching()
+                ? "GDLauncher is currently preparing to launch the game. Please wait for it to "
+                  "finish before closing the launcher."
+                : "GDLauncher is currently syncing save data back from the game. Please wait for "
+                  "it to finish before closing the launcher.");
         event->ignore();
         return;
     }

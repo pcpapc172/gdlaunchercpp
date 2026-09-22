@@ -193,11 +193,18 @@ void GameLauncher::launchInstance(const QString &instanceName) {
         return;
     }
 
+    // Set for the whole prep/copy phase below, so a close attempt mid-launch is rejected the
+    // same way as one during an active run or sync -- most of this happens synchronously on
+    // the UI thread anyway (so a close can't land here today), but the flag makes that
+    // guarantee explicit rather than incidental, and holds if any of this becomes async later.
+    m_launching = true;
+
     emit statusUpdate(QString("Preparing to launch %1...").arg(instanceName));
 
     const QString instancePath = Settings::instancesDir() + "/" + instanceName;
     QFile jf(instancePath + "/instance.json");
     if (!jf.open(QIODevice::ReadOnly)) {
+        m_launching = false;
         emit launchComplete();
         emit statusUpdate("Launch failed: could not read instance.json");
         return;
@@ -226,6 +233,7 @@ void GameLauncher::launchInstance(const QString &instanceName) {
 
     if (!QFileInfo::exists(ctx.versionPath)) {
         GD_DEBUG_LOG("launch", "Version path does not exist");
+        m_launching = false;
         emit launchComplete();
         emit statusUpdate("Version not found");
         return;
@@ -260,6 +268,7 @@ void GameLauncher::launchInstance(const QString &instanceName) {
     GD_DEBUG_LOG("launch", QString("Resolved executable: %1").arg(ctx.exePath));
     if (!QFileInfo::exists(ctx.exePath)) {
         GD_DEBUG_LOG("launch", "Executable does not exist");
+        m_launching = false;
         emit launchComplete();
         emit statusUpdate(data.value("useSteamEmu").toBool(false) && !isCustomExe
             ? QString("Steam emulator executable not found: %1").arg(QFileInfo(ctx.exePath).fileName())
@@ -272,6 +281,7 @@ void GameLauncher::launchInstance(const QString &instanceName) {
 
     const PrepResult prep = prepareLocalAppData(ctx.localAppDataPath, ctx.infoJsonPath);
     if (!prep.success) {
+        m_launching = false;
         emit launchComplete();
         emit statusUpdate(prep.error.isEmpty() ? "Failed to prepare save data" : prep.error);
         return;
@@ -311,6 +321,7 @@ void GameLauncher::launchInstance(const QString &instanceName) {
         m_gameProcess->start();
     }
 
+    m_launching = false;
     m_gameRunning = true;
     emit gameStarted();
     emit logStatusChanged(true);

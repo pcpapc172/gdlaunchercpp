@@ -16,6 +16,7 @@ public:
 
     bool isGameRunning() const { return m_gameRunning; }
     bool isSyncing() const { return m_syncing; }
+    bool isLaunching() const { return m_launching; }
 
     // Kicks off the (mostly synchronous, some async via timers) launch sequence.
     void launchInstance(const QString &instanceName);
@@ -37,6 +38,7 @@ private:
     QWidget *m_dialogParent;
     bool m_gameRunning = false;
     bool m_syncing = false;
+    bool m_launching = false;
     QProcess *m_gameProcess = nullptr;
     QTimer *m_monitorTimer = nullptr;
     QStringList m_logBuffer;
