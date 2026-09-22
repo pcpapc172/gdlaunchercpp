@@ -66,6 +66,17 @@ private:
     struct PrepResult { bool success = false; bool found = false; QString error; };
     PrepResult prepareLocalAppData(const QString &localPath, const QString &infoPath, bool isTour = false);
 
+    // A second, redundant recovery marker written directly into the live save folder itself
+    // (never treated as managed save data -- excluded from getAllManagedItems() so it's never
+    // copied or swept by transferManagedItems), in case the primary one in the launcher's own
+    // AppData dir is ever lost. Carries enough (instanceName + the flags that decide which
+    // items are "managed") to recover without needing to reread the instance's own
+    // instance.json, which may itself be the thing that's gone missing.
+    static QString localMarkerPath(const QString &localAppDataPath);
+    static void writeLocalMarker(const QString &localAppDataPath, const QString &instanceName,
+                                  const QJsonObject &data);
+    static void removeLocalMarker(const QString &localAppDataPath);
+
     bool checkProcessRunning(const QString &processName) const;
     void beginMonitor(LaunchContext ctx);
     void watchForExit(LaunchContext ctx);

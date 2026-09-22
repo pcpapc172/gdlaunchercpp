@@ -78,6 +78,29 @@ bool GameLauncher::checkProcessRunning(const QString &processName) const {
     return out.toLower().contains(processName.toLower());
 }
 
+QString GameLauncher::localMarkerPath(const QString &localAppDataPath) {
+    return localAppDataPath + "/.gdlauncher-instance.json";
+}
+
+void GameLauncher::writeLocalMarker(const QString &localAppDataPath, const QString &instanceName,
+                                     const QJsonObject &data) {
+    QJsonObject marker;
+    marker["instanceName"] = instanceName;
+    marker["saveFolderName"] = data.value("saveFolderName").toString();
+    marker["isGeodeCompatible"] = data.value("isGeodeCompatible").toBool(false);
+    marker["useMegaHack"] = data.value("useMegaHack").toBool(false);
+    marker["launchedAt"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
+    QFile f(localMarkerPath(localAppDataPath));
+    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        f.write(QJsonDocument(marker).toJson(QJsonDocument::Indented));
+        f.close();
+    }
+}
+
+void GameLauncher::removeLocalMarker(const QString &localAppDataPath) {
+    QFile::remove(localMarkerPath(localAppDataPath));
+}
+
 GameLauncher::PrepResult GameLauncher::prepareLocalAppData(const QString &localPath, const QString &infoPath, bool isTour) {
     PrepResult res;
     GD_DEBUG_LOG("transfer", QString("Scanning %1 for unmanaged/leftover save data").arg(localPath));
@@ -89,28 +112,50 @@ GameLauncher::PrepResult GameLauncher::prepareLocalAppData(const QString &localP
 
     if (foundInAppData.isEmpty()) {
         GD_DEBUG_LOG("transfer", "Nothing found there; skipping.");
+        removeLocalMarker(localPath); // stale, since there's nothing left for it to describe
         res.success = true; res.found = false; return res;
     }
     GD_DEBUG_LOG("transfer", QString("Found: %1").arg(foundInAppData.join(", ")));
 
-    if (QFileInfo::exists(infoPath)) {
+    // The primary marker (launcher's own AppData dir) always wins when present. Otherwise, if
+    // it's missing but the redundant one written directly into this save folder is still here,
+    // it means the launcher's own data dir was lost/wiped/corrupted between the crash and now
+    // -- fall back to it rather than dumping the user straight into the "unmanaged data found"
+    // prompt for what's actually a perfectly identifiable previous instance.
+    const bool hasPrimary = QFileInfo::exists(infoPath);
+    const QString localMarker = localMarkerPath(localPath);
+    const bool hasLocalOnly = !hasPrimary && QFileInfo::exists(localMarker);
+
+    if (hasPrimary || hasLocalOnly) {
         if (isTour) { res.success = true; res.found = false; return res; }
-        QFile f(infoPath);
-        if (!f.open(QIODevice::ReadOnly)) { res.success = false; res.error = "Failed to read info.json"; return res; }
+        const QString sourcePath = hasPrimary ? infoPath : localMarker;
+        QFile f(sourcePath);
+        if (!f.open(QIODevice::ReadOnly)) { res.success = false; res.error = "Failed to read recovery marker"; return res; }
         QJsonObject info = QJsonDocument::fromJson(f.readAll()).object();
         f.close();
+        if (hasLocalOnly) {
+            GD_DEBUG_LOG("transfer", QString("Primary recovery marker missing; falling back to the one in %1").arg(localPath));
+        }
         const QString targetDir = Settings::instancesDir() + "/" + info.value("instanceName").toString();
         if (!QFileInfo::exists(targetDir + "/instance.json")) {
-            GD_DEBUG_LOG("transfer", QString("Stale info.json pointed at missing instance '%1'; discarding.")
+            GD_DEBUG_LOG("transfer", QString("Stale recovery marker pointed at missing instance '%1'; discarding.")
                 .arg(info.value("instanceName").toString()));
-            QFile::remove(infoPath);
+            if (hasPrimary) QFile::remove(infoPath);
+            removeLocalMarker(localPath);
             res.success = true;
             return res;
         }
-        QFile pf(targetDir + "/instance.json");
-        pf.open(QIODevice::ReadOnly);
-        QJsonObject prevData = QJsonDocument::fromJson(pf.readAll()).object();
-        pf.close();
+        // The local marker already carries saveFolderName/isGeodeCompatible/useMegaHack itself
+        // (that's the whole point -- it doesn't need instance.json to still exist to know what
+        // to recover), but the primary one only ever stored instanceName, so still look those
+        // up from instance.json in that case.
+        QJsonObject prevData = info;
+        if (hasPrimary) {
+            QFile pf(targetDir + "/instance.json");
+            pf.open(QIODevice::ReadOnly);
+            prevData = QJsonDocument::fromJson(pf.readAll()).object();
+            pf.close();
+        }
         GD_DEBUG_LOG("transfer", QString("Recovering leftover data back into instance '%1' (previous run likely crashed before syncing)")
             .arg(info.value("instanceName").toString()));
         InstanceManager::transferManagedItems(
@@ -118,7 +163,8 @@ GameLauncher::PrepResult GameLauncher::prepareLocalAppData(const QString &localP
             InstanceManager::getManagedItems(prevData.value("isGeodeCompatible").toBool(),
                                               prevData.value("useMegaHack").toBool()),
             true);
-        QFile::remove(infoPath);
+        if (hasPrimary) QFile::remove(infoPath);
+        removeLocalMarker(localPath);
         GD_DEBUG_LOG("transfer", "Recovery transfer complete.");
         res.success = true; res.found = true;
         return res;
@@ -308,6 +354,8 @@ void GameLauncher::launchInstance(const QString &instanceName) {
     infoOut.open(QIODevice::WriteOnly | QIODevice::Truncate);
     infoOut.write(QJsonDocument(infoJson).toJson(QJsonDocument::Indented));
     infoOut.close();
+    writeLocalMarker(ctx.localAppDataPath, instanceName, data);
+    GD_DEBUG_LOG("transfer", QString("Wrote recovery marker into %1").arg(ctx.localAppDataPath));
 
     emit statusUpdate(QString("Launching %1...").arg(instanceName));
     GD_DEBUG_LOG("launch", QString("Spawning process: %1 (cwd=%2)").arg(ctx.exePath, ctx.versionPath));
@@ -414,6 +462,7 @@ void GameLauncher::postLaunchCleanup(LaunchContext ctx) {
     GD_DEBUG_LOG("transfer", "Sync-back complete.");
 
     if (QFileInfo::exists(ctx.infoJsonPath)) QFile::remove(ctx.infoJsonPath);
+    removeLocalMarker(ctx.localAppDataPath);
 
     if (ctx.data.value("enableGeodeLogging").toBool(false)) {
         QString modPath = ctx.versionPath + "/geode/mods/pcpapc172.gdlauncher-log.geode";
