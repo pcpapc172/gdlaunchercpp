@@ -167,7 +167,17 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
         m_progressBar->setAnimatedValue(0);
         refreshInstances();
     });
-    connect(m_launcher, &GameLauncher::gameStarted, this, [this]() { m_progressBar->setAnimatedValue(100); });
+    connect(m_launcher, &GameLauncher::gameStarted, this, [this]() {
+        m_progressBar->setAnimatedValue(100);
+        // "Enable Log Output" in Settings promises a live terminal when launching -- the
+        // console window has to actually exist and be shown for that to be true, not just
+        // silently accumulate lines nobody can see.
+        if (m_settings.enableLogOutput && m_consoleWindow) {
+            m_consoleWindow->show();
+            m_consoleWindow->raise();
+            m_consoleWindow->activateWindow();
+        }
+    });
     connect(m_launcher, &GameLauncher::gameStopped, this, [this]() { setUiEnabled(true); });
     connect(m_launcher, &GameLauncher::logLine, this, &MainWindow::appendLog);
     connect(m_launcher, &GameLauncher::logStatusChanged, this, [this](bool running) {
@@ -188,10 +198,16 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     QTimer::singleShot(3000, this, [this]() { m_updateChecker->check(false); });
     QTimer::singleShot(0, this, &MainWindow::runStartupChecks);
 
+    // The console window needs to exist in every build, not just a debug-logging one --
+    // GameLauncher::logLine/logStatusChanged and LogPipeServer both feed it regardless of
+    // build type, and "Enable Log Output" in Settings is a normal user-facing option that
+    // has to actually work in a plain Release build. It used to only ever get constructed
+    // for kDebugLoggingEnabled builds, so turning that setting on anywhere else did nothing
+    // visible: appendLog() had nowhere to put the lines.
+    m_consoleWindow = new ConsoleWindow(nullptr);
     if constexpr (kDebugLoggingEnabled) {
-        // A debug build's whole point is visibility, so open the live log console
-        // immediately rather than making the user dig for a button to see it.
-        m_consoleWindow = new ConsoleWindow(nullptr);
+        // A debug build's whole point is visibility, so open it immediately rather than
+        // waiting for a launch.
         m_consoleWindow->show();
         GD_DEBUG_LOG("startup", "Live log console opened.");
     }
