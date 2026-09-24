@@ -7,6 +7,7 @@
 #include <QRadioButton>
 #include <QSpinBox>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QLabel>
 #include <QPushButton>
 #include <QButtonGroup>
@@ -64,6 +65,27 @@ SettingsDialog::SettingsDialog(QWidget *parent, const AppSettings &current, cons
     advancedLayout->addWidget(help);
     m_logOutputCheck = new QCheckBox("Enable Log Output (shows a live terminal when launching)", this);
     advancedLayout->addWidget(m_logOutputCheck);
+
+    advancedLayout->addWidget(new QLabel("How GDLauncher was installed (used for updates):", this));
+    m_updatePackageTypeCombo = new QComboBox(this);
+#if defined(Q_OS_WIN)
+    m_updatePackageTypeCombo->addItem("Portable (.zip)", "portable");
+    m_updatePackageTypeCombo->addItem("Installer (.exe)", "nsis");
+    m_updatePackageTypeCombo->addItem("Windows Installer (.msi)", "msi");
+#else
+    m_updatePackageTypeCombo->addItem("Portable (.tar.gz)", "portable");
+    m_updatePackageTypeCombo->addItem("Debian/Ubuntu Package (.deb)", "deb");
+    m_updatePackageTypeCombo->addItem("Fedora/RHEL Package (.rpm)", "rpm");
+#endif
+    advancedLayout->addWidget(m_updatePackageTypeCombo);
+    auto *updateHelp = new QLabel(
+        "A portable copy downloads and extracts an update for you to move into place; an "
+        "installer/package downloads it, closes GDLauncher, and runs it for you.", this);
+    updateHelp->setObjectName("subtext");
+    updateHelp->setStyleSheet("font-size:12px;");
+    updateHelp->setWordWrap(true);
+    advancedLayout->addWidget(updateHelp);
+
     root->addWidget(advancedBox);
 
     auto *footer = new QLabel(QString("Launcher created by pcpapc172 — v%1").arg(appVersion), this);
@@ -90,6 +112,10 @@ SettingsDialog::SettingsDialog(QWidget *parent, const AppSettings &current, cons
     m_darkRadio->setChecked(current.theme == "Dark");
     m_syncDelaySpin->setValue(current.syncDelay);
     m_logOutputCheck->setChecked(current.enableLogOutput);
+    {
+        const int idx = m_updatePackageTypeCombo->findData(current.updatePackageType);
+        m_updatePackageTypeCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+    }
 
     connect(checkUpdatesBtn, &QPushButton::clicked, this, &SettingsDialog::checkUpdatesRequested);
     connect(openDataBtn, &QPushButton::clicked, this, &SettingsDialog::openDataFolderRequested);
@@ -98,6 +124,7 @@ SettingsDialog::SettingsDialog(QWidget *parent, const AppSettings &current, cons
         m_result.closeBehavior = m_closeAfterRadio->isChecked() ? "Close After Game Ends" : "Stay Open";
         m_result.syncDelay = m_syncDelaySpin->value();
         m_result.enableLogOutput = m_logOutputCheck->isChecked();
+        m_result.updatePackageType = m_updatePackageTypeCombo->currentData().toString();
         m_result.lastRunVersion = appVersion;
         accept();
     });

@@ -12,6 +12,7 @@ QJsonObject AppSettings::toJson() const {
     o["sync_delay"] = syncDelay;
     o["last_run_version"] = lastRunVersion.isEmpty() ? QJsonValue() : QJsonValue(lastRunVersion);
     o["enable_log_output"] = enableLogOutput;
+    o["update_package_type"] = updatePackageType;
     return o;
 }
 
@@ -22,6 +23,7 @@ AppSettings AppSettings::fromJson(const QJsonObject &obj) {
     if (obj.contains("sync_delay")) s.syncDelay = obj["sync_delay"].toInt(s.syncDelay);
     if (obj.contains("last_run_version")) s.lastRunVersion = obj["last_run_version"].toString();
     if (obj.contains("enable_log_output")) s.enableLogOutput = obj["enable_log_output"].toBool(s.enableLogOutput);
+    if (obj.contains("update_package_type")) s.updatePackageType = obj["update_package_type"].toString(s.updatePackageType);
     return s;
 }
 

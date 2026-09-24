@@ -1,5 +1,6 @@
 #include "UpdateChecker.h"
 #include "DebugLog.h"
+#include "Settings.h"
 #include <QNetworkRequest>
 #include <QNetworkReply>
 #include <QJsonDocument>
@@ -15,6 +16,7 @@
 #include <QUrl>
 #include <QCoreApplication>
 #include <QStringList>
+#include <QApplication>
 
 #ifdef Q_OS_WIN
 extern "C" {
@@ -43,6 +45,14 @@ bool UpdateChecker::versionGreater(const QString &a, const QString &b) {
         if (va != vb) return va > vb;
     }
     return false;
+}
+
+QString UpdateChecker::assetExtensionForPackageType(const QString &packageType) {
+    if (packageType == "nsis") return ".exe";
+    if (packageType == "msi") return ".msi";
+    if (packageType == "deb") return ".deb";
+    if (packageType == "rpm") return ".rpm";
+    return isLinux() ? ".tar.gz" : ".zip"; // "portable" and anything unrecognized
 }
 
 // We publish plain archives (a zip on Windows, a tar.gz on Linux), not installers, so
@@ -121,32 +131,47 @@ void UpdateChecker::check(bool isManual) {
             return;
         }
 
-        // Matches what release.yml actually publishes: gdlauncher-windows-x86_64.zip and
-        // gdlauncher-linux-x86_64.tar.gz.
+        // Which asset to grab depends on how the user says they installed GDLauncher
+        // (Settings::updatePackageType) -- a portable zip/tar.gz, or a real installer/package
+        // that release.yml also publishes (gdlauncher-windows-x86_64-installer.exe,
+        // gdlauncher-windows-x86_64.msi, gdlauncher-<ver>-amd64.deb, gdlauncher-<ver>-1.x86_64.rpm).
+        const AppSettings settings = Settings::load();
+        const QString packageType = settings.updatePackageType;
+        const bool isPortable = packageType != "nsis" && packageType != "msi" &&
+                                 packageType != "deb" && packageType != "rpm";
+        const QString wantExt = assetExtensionForPackageType(packageType);
+
         QJsonObject updateAsset;
         const QJsonArray assets = data.value("assets").toArray();
         for (const QJsonValue &av : assets) {
             const QString name = av.toObject().value("name").toString();
-            const bool matchesPlatform = isLinux() ? name.contains("linux", Qt::CaseInsensitive)
-                                                    : name.contains("windows", Qt::CaseInsensitive);
-            const bool matchesExtension = isLinux() ? name.endsWith(".tar.gz") : name.endsWith(".zip");
-            if (matchesPlatform && matchesExtension) { updateAsset = av.toObject(); break; }
+            // .exe/.msi only ever exist as Windows assets and .deb/.rpm only as Linux ones, so
+            // the extension alone is unambiguous for installer/package types; the portable
+            // zip/tar.gz still needs the platform-name check since both exist in one release.
+            const bool matchesPlatform = !isPortable || (isLinux() ? name.contains("linux", Qt::CaseInsensitive)
+                                                                    : name.contains("windows", Qt::CaseInsensitive));
+            if (matchesPlatform && name.endsWith(wantExt, Qt::CaseInsensitive)) { updateAsset = av.toObject(); break; }
         }
 
         if (updateAsset.isEmpty()) {
             if (isManual)
                 QMessageBox::warning(m_dialogParent, "No Compatible Update",
-                    QString("Update %1 is available, but no compatible build was found for your platform.").arg(latestVersion));
+                    QString("Update %1 is available, but no %2 build was found for it.")
+                        .arg(latestVersion, wantExt));
             return;
         }
 
-        const int response = QMessageBox::information(m_dialogParent, "Update Available",
-            QString("Version %1 is available.\n\nCurrent: %2\nLatest: %3\n\nFile: %4")
-                .arg(latestVersion, currentVersion, latestVersion, updateAsset.value("name").toString()),
+        const QString assetName = updateAsset.value("name").toString();
+        const QString bodyText = isPortable
+            ? QString("Version %1 is available.\n\nCurrent: %2\nLatest: %3\n\nFile: %4")
+                  .arg(latestVersion, currentVersion, latestVersion, assetName)
+            : QString("Version %1 is available.\n\nCurrent: %2\nLatest: %3\n\nFile: %4\n\n"
+                       "GDLauncher will download this, close itself, and run it.")
+                  .arg(latestVersion, currentVersion, latestVersion, assetName);
+        const int response = QMessageBox::information(m_dialogParent, "Update Available", bodyText,
             QMessageBox::Ok | QMessageBox::Cancel, QMessageBox::Ok);
         if (response != QMessageBox::Ok) return;
 
-        const QString assetName = updateAsset.value("name").toString();
         const QString downloadUrl = updateAsset.value("browser_download_url").toString();
         const QString downloadPath = QStandardPaths::writableLocation(QStandardPaths::TempLocation) + "/" + assetName;
         GD_DEBUG_LOG("update", QString("Downloading %1").arg(downloadUrl));
@@ -163,13 +188,37 @@ void UpdateChecker::check(bool isManual) {
         connect(dlReply, &QNetworkReply::downloadProgress, this, [this](qint64 recv, qint64 total) {
             if (total > 0) emit progress(static_cast<int>(recv * 100 / total));
         });
-        connect(dlReply, &QNetworkReply::finished, this, [this, dlReply, out, downloadPath, assetName, latestVersion]() {
+        connect(dlReply, &QNetworkReply::finished, this,
+                [this, dlReply, out, downloadPath, assetName, latestVersion, isPortable, packageType]() {
             out->close();
             dlReply->deleteLater();
             out->deleteLater();
             if (dlReply->error() != QNetworkReply::NoError) {
                 GD_DEBUG_LOG("update", QString("Download failed: %1").arg(dlReply->errorString()));
                 QMessageBox::critical(m_dialogParent, "Update Error", dlReply->errorString());
+                return;
+            }
+
+            if (!isPortable) {
+                // A real installer/package: no extraction needed, just hand it to the OS to run
+                // and get out of its way -- NSIS/WiX both upgrade in place (same fixed install
+                // dir across versions), and a .deb/.rpm's default handler (package manager /
+                // software center) needs GDLauncher's own files unlocked to overwrite them.
+                emit progressComplete();
+                emit statusUpdate("Launching installer...");
+                GD_DEBUG_LOG("update", QString("Downloaded %1; launching it and closing.").arg(downloadPath));
+
+                if (packageType == "msi") {
+                    QProcess::startDetached("msiexec", {"/i", QDir::toNativeSeparators(downloadPath)});
+                } else if (packageType == "nsis") {
+                    QProcess::startDetached(downloadPath, {});
+                } else {
+                    // deb/rpm: hand off to whatever the desktop associates with the package
+                    // (software center, gdebi, dnfdragora, ...) rather than assuming a specific
+                    // package manager and how it wants to prompt for a password.
+                    QDesktopServices::openUrl(QUrl::fromLocalFile(downloadPath));
+                }
+                qApp->quit();
                 return;
             }
 
