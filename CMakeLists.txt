@@ -58,6 +58,7 @@ set(APP_SOURCES
     src/InstanceManager.cpp
     src/VersionManager.cpp
     src/GameLauncher.cpp
+    src/ProtonManager.cpp
     src/ConsoleWindow.cpp
     src/UpdateChecker.cpp
     src/LogPipeServer.cpp
@@ -82,6 +83,7 @@ set(APP_HEADERS
     src/InstanceManager.h
     src/VersionManager.h
     src/GameLauncher.h
+    src/ProtonManager.h
     src/ConsoleWindow.h
     src/UpdateChecker.h
     src/LogPipeServer.h

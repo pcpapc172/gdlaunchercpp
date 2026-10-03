@@ -65,6 +65,15 @@ SettingsDialog::SettingsDialog(QWidget *parent, const AppSettings &current, cons
     advancedLayout->addWidget(help);
     m_logOutputCheck = new QCheckBox("Enable Log Output (shows a live terminal when launching)", this);
     advancedLayout->addWidget(m_logOutputCheck);
+#ifdef Q_OS_LINUX
+    m_protonGECheck = new QCheckBox("Download GE-Proton and launch with UMULauncher", this);
+    m_protonGECheck->setChecked(current.useProtonGE);
+    advancedLayout->addWidget(m_protonGECheck);
+    auto *protonHelp = new QLabel("Downloads GE-Proton automatically on first launch. May improve performance and compatibility.", this);
+    protonHelp->setObjectName("subtext");
+    protonHelp->setWordWrap(true);
+    advancedLayout->addWidget(protonHelp);
+#endif
 
     advancedLayout->addWidget(new QLabel("How GDLauncher was installed (used for updates):", this));
     m_updatePackageTypeCombo = new QComboBox(this);
@@ -119,11 +128,12 @@ SettingsDialog::SettingsDialog(QWidget *parent, const AppSettings &current, cons
 
     connect(checkUpdatesBtn, &QPushButton::clicked, this, &SettingsDialog::checkUpdatesRequested);
     connect(openDataBtn, &QPushButton::clicked, this, &SettingsDialog::openDataFolderRequested);
-    connect(saveBtn, &QPushButton::clicked, this, [this, appVersion]() {
+    connect(saveBtn, &QPushButton::clicked, this, [this, appVersion, current]() {
         m_result.theme = m_darkRadio->isChecked() ? "Dark" : "Light";
         m_result.closeBehavior = m_closeAfterRadio->isChecked() ? "Close After Game Ends" : "Stay Open";
         m_result.syncDelay = m_syncDelaySpin->value();
         m_result.enableLogOutput = m_logOutputCheck->isChecked();
+        m_result.useProtonGE = m_protonGECheck ? m_protonGECheck->isChecked() : current.useProtonGE;
         m_result.updatePackageType = m_updatePackageTypeCombo->currentData().toString();
         m_result.lastRunVersion = appVersion;
         accept();

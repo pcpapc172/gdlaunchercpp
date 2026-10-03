@@ -50,6 +50,24 @@ cmake --build build -j$(nproc)
 
 On Debian/Ubuntu: `apt install qt6-base-dev zlib1g-dev build-essential cmake`.
 
+## GE-Proton on Linux
+
+In Settings, enable **Download GE-Proton and launch with UMULauncher**. On the
+next launch, GDLauncher downloads the latest official GE-Proton release for your
+CPU and the portable UMU launcher. Download and unpacking progress appears in the
+main window's progress bar; later launches reuse the installed runtime.
+
+GE-Proton and UMU are stored under `~/.config/gdlauncher/Runtimes`, with a separate
+prefix in `~/.config/gdlauncher/ProtonPrefix`. Instance saves sync into that prefix
+and back after the game exits. Geode-compatible instances also receive the
+`WINEDLLOVERRIDES=xinput1_4=n,b` override. Disabling the option returns to Wine.
+
+This option requires Python 3.10 or newer and tar, plus working graphics/Vulkan drivers.
+[UMU](https://github.com/Open-Wine-Components/umu-launcher) runs Proton outside
+Steam and automatically prepares the Steam Linux Runtime on first launch, which
+can take additional time. That preparation uses an indeterminate progress bar.
+Performance improvements depend on the game and system.
+
 ## Layout
 
 ```

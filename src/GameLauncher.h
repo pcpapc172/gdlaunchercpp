@@ -7,8 +7,10 @@
 #include <QTimer>
 #include <QWidget>
 
+class ProtonManager;
+
 // Port of launchGame/terminateGame/prepareLocalAppData/etc. from main.js.
-// On Linux the game runs under Wine; on Windows it runs natively.
+// On Linux the game runs under Wine or GE-Proton/UMU; on Windows it runs natively.
 class GameLauncher : public QObject {
     Q_OBJECT
 public:
@@ -33,6 +35,7 @@ signals:
     void gameStopped();
     void logLine(const QString &line);
     void logStatusChanged(bool running);
+    void launchProgress(int percentage);
 
 private:
     QWidget *m_dialogParent;
@@ -42,6 +45,9 @@ private:
     QProcess *m_gameProcess = nullptr;
     QTimer *m_monitorTimer = nullptr;
     QStringList m_logBuffer;
+    ProtonManager *m_protonManager = nullptr;
+    bool m_protonReady = false;
+    QString m_pendingInstance;
 
     struct LaunchContext {
         QString instanceName;
@@ -61,7 +67,7 @@ private:
         QString gameProcessName;
     };
 
-    QString linuxAppDataPath(const QString &saveFolderName) const;
+    QString linuxAppDataPath(const QString &saveFolderName, bool useProton = false) const;
     // Returns {success, found, error}
     struct PrepResult { bool success = false; bool found = false; QString error; };
     PrepResult prepareLocalAppData(const QString &localPath, const QString &infoPath, bool isTour = false);

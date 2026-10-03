@@ -162,8 +162,13 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     connect(m_settingsBtn, &QPushButton::clicked, this, &MainWindow::onSettings);
 
     connect(m_launcher, &GameLauncher::statusUpdate, this, [this](const QString &msg) { m_statusLabel->setText(msg); });
+    connect(m_launcher, &GameLauncher::launchProgress, this, [this](int percentage) {
+        m_progressBar->setRange(0, percentage < 0 ? 0 : 100);
+        if (percentage >= 0) m_progressBar->setAnimatedValue(percentage);
+    });
     connect(m_launcher, &GameLauncher::launchComplete, this, [this]() {
         setUiEnabled(true);
+        m_progressBar->setRange(0, 100);
         m_progressBar->setAnimatedValue(0);
         refreshInstances();
     });
@@ -195,7 +200,9 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     refreshInstances();
     Animations::fadeIn(this);
 
-    QTimer::singleShot(3000, this, [this]() { m_updateChecker->check(false); });
+    QTimer::singleShot(3000, this, [this]() {
+        if (!m_launcher->isLaunching() && !m_launcher->isGameRunning()) m_updateChecker->check(false);
+    });
     QTimer::singleShot(0, this, &MainWindow::runStartupChecks);
 
     // The console window needs to exist in every build, not just a debug-logging one --
@@ -231,6 +238,7 @@ void MainWindow::runStartupChecks() {
         Settings::save(m_settings);
 
         const QStringList entries = {
+            "Added a Linux option to download GE-Proton and launch with UMULauncher, with installation progress in the main window.",
             "Ported the launcher to a native C++/Qt6 build for a smaller footprint and lower resource usage.",
             "Fixed the Downloads list incorrectly marking every version as installed.",
             "Refreshed the interface with a consistent theme, iconography, and animated transitions.",
@@ -329,7 +337,8 @@ void MainWindow::onSelectionChanged() {
         const int row = selected.first().row();
         if (row >= 0 && row < m_instances.size()) m_selectedInstance = m_instances[row].name;
     }
-    const bool sel = !m_selectedInstance.isEmpty() && !m_launcher->isGameRunning();
+    const bool sel = !m_selectedInstance.isEmpty() && !m_launcher->isGameRunning()
+        && !m_launcher->isLaunching() && !m_launcher->isSyncing();
     m_launchBtn->setEnabled(sel);
     m_editBtn->setEnabled(sel);
     m_deleteBtn->setEnabled(sel);

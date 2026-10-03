@@ -27,5 +27,6 @@ private:
     QRadioButton *m_darkRadio;
     QSpinBox *m_syncDelaySpin;
     QCheckBox *m_logOutputCheck;
+    QCheckBox *m_protonGECheck = nullptr;
     QComboBox *m_updatePackageTypeCombo;
 };
