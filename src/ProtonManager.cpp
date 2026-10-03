@@ -200,5 +200,8 @@ void ProtonManager::initializePrefix() {
         }
         finish(true);
     });
-    process->start("python3", {launcherPath(), ""});
+    // UMU creates the prefix for an empty executable but intentionally returns
+    // an error when Proton tries to launch it. Run a harmless Windows command
+    // instead so a completed initialization has a meaningful success status.
+    process->start("python3", {launcherPath(), "cmd.exe", "/c", "exit", "0"});
 }
