@@ -363,6 +363,11 @@ void GameLauncher::launchInstance(const QString &instanceName) {
     m_gameProcess = new QProcess(this);
     m_gameProcess->setWorkingDirectory(ctx.versionPath);
     if (kIsLinux) {
+        if (data.value("isGeodeCompatible").toBool(false)) {
+            QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+            env.insert("WINEDLLOVERRIDES", "xinput1_4=n,b");
+            m_gameProcess->setProcessEnvironment(env);
+        }
         m_gameProcess->start("wine", {ctx.exePath});
     } else {
         m_gameProcess->setProgram(ctx.exePath);
