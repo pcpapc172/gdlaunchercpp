@@ -42,5 +42,4 @@ ChangelogDialog::ChangelogDialog(QWidget *parent, const QString &appVersion, con
     root->addLayout(btnRow);
 
     connect(okBtn, &QPushButton::clicked, this, &QDialog::accept);
-    Animations::fadeIn(this);
 }

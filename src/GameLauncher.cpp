@@ -21,6 +21,10 @@
 #include <QPushButton>
 #include <QTime>
 #include <QCoreApplication>
+#include <QtConcurrent/QtConcurrent>
+#include <QFutureWatcher>
+#include <QDirIterator>
+#include <QElapsedTimer>
 
 #ifdef Q_OS_LINUX
 static const bool kIsLinux = true;
@@ -60,41 +64,102 @@ GameLauncher::GameLauncher(QWidget *dialogParent, QObject *parent)
                 return;
             }
             m_protonReady = true;
-            launchInstance(m_pendingInstance);
+            if (!m_pendingTool.isEmpty()) { m_launching = true; startTool(); }
+            else launchInstance(m_pendingInstance);
         });
     }
 }
 
-QString GameLauncher::linuxAppDataPath(const QString &saveFolderName, bool useProton) const {
-    if (!kIsLinux) {
-        const QString localAppData = QProcessEnvironment::systemEnvironment().value("LOCALAPPDATA");
-        return localAppData + "/" + saveFolderName;
-    }
-    if (useProton) return ProtonManager::prefixDir() + "/drive_c/users/steamuser/AppData/Local/" + saveFolderName;
-    const QString home = QDir::homePath();
-    const QString username = QFileInfo(home).fileName();
-    const QString wineUserDir = home + "/.wine/drive_c/users/" + username;
-    const QStringList candidates = {
-        wineUserDir + "/AppData/Local/" + saveFolderName,
-        wineUserDir + "/Local Settings/Application Data/" + saveFolderName
-    };
-    for (const QString &c : candidates) {
-        if (QFileInfo::exists(c + "/CCGameManager.dat")) return c;
-    }
-    return candidates.first();
+GameLauncher::~GameLauncher() { m_transferFuture.waitForFinished(); }
+
+void GameLauncher::runExecutable(const QString &executable, bool geodeCompatible) {
+    if (!kIsLinux || m_launching || m_gameRunning || m_syncing) return;
+    m_launching = true;
+    m_pendingTool = executable;
+    m_toolGeode = geodeCompatible;
+    if (Settings::load().useProtonGE && !m_protonReady) m_protonManager->ensureReady();
+    else startTool();
 }
 
-bool GameLauncher::checkProcessRunning(const QString &processName) const {
-    QProcess p;
-    if (kIsLinux) {
-        p.start("pgrep", {"-f", processName});
-    } else {
-        p.start("tasklist", {"/FI", QString("IMAGENAME eq %1").arg(processName), "/NH"});
-    }
-    if (!p.waitForFinished(3000)) { p.kill(); return false; }
-    const QString out = QString::fromLocal8Bit(p.readAllStandardOutput());
-    if (kIsLinux) return !out.trimmed().isEmpty();
-    return out.toLower().contains(processName.toLower());
+void GameLauncher::startTool() {
+    const QString executable = m_pendingTool;
+    m_pendingTool.clear();
+    const bool proton = Settings::load().useProtonGE;
+    auto env = proton ? ProtonManager::environment() : QProcessEnvironment::systemEnvironment();
+    if (m_toolGeode) env.insert("WINEDLLOVERRIDES", "xinput1_4=n,b");
+    auto *process = new QProcess(this);
+    m_toolProcess = process;
+    process->setProcessEnvironment(env);
+    if (QFileInfo(executable).isAbsolute()) process->setWorkingDirectory(QFileInfo(executable).absolutePath());
+    connect(process, &QProcess::readyReadStandardOutput, this, [this, process]() {
+        appendLog(QString::fromLocal8Bit(process->readAllStandardOutput()));
+    });
+    connect(process, &QProcess::readyReadStandardError, this, [this, process]() {
+        appendLog(QString::fromLocal8Bit(process->readAllStandardError()));
+    });
+    connect(process, &QProcess::errorOccurred, this, [this, process](QProcess::ProcessError error) {
+        if (error != QProcess::FailedToStart) return;
+        m_toolProcess = nullptr;
+        m_launching = false;
+        emit launchComplete();
+        emit statusUpdate("Could not launch executable: " + process->errorString());
+        process->deleteLater();
+    });
+    connect(process, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
+            [this, process](int code, QProcess::ExitStatus status) {
+        m_toolProcess = nullptr;
+        m_launching = false;
+        emit launchComplete();
+        emit statusUpdate(code == 0 && status == QProcess::NormalExit ? "Ready" : "Executable exited with an error. See the log for details.");
+        process->deleteLater();
+    });
+    emit launchProgress(-1);
+    emit statusUpdate("Running " + QFileInfo(executable).fileName() + (proton ? " with UMULauncher..." : " with Wine..."));
+    if (proton) process->start("python3", {ProtonManager::launcherPath(), executable});
+    else process->start("wine", {executable});
+}
+
+void GameLauncher::transferAsync(const QString &src, const QString &dest, const QStringList &items,
+                                bool move, const QString &label, const std::function<void()> &done) {
+    emit launchProgress(0);
+    auto *watcher = new QFutureWatcher<bool>(this);
+    connect(watcher, &QFutureWatcher<bool>::finished, this, [this, watcher, done, label]() {
+        const bool success = watcher->result();
+        watcher->deleteLater();
+        if (success) { done(); return; }
+        m_launching = false;
+        m_syncing = false;
+        emit launchComplete();
+        emit statusUpdate(label + " failed. Existing recovery markers have been kept.");
+        QMessageBox::warning(m_dialogParent, "Save Transfer Failed",
+            "Could not transfer save data. Check disk space and permissions, then retry. Existing recovery markers have been kept.");
+    });
+    m_transferFuture = QtConcurrent::run([this, src, dest, items, move, label]() {
+        int total = 0;
+        for (const auto &item : items) {
+            const QString path = src + "/" + item;
+            if (QFileInfo(path).isFile()) ++total;
+            else {
+                QDirIterator files(path, QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+                while (files.hasNext()) { files.next(); ++total; }
+            }
+        }
+        QElapsedTimer throttle;
+        throttle.start();
+        return InstanceManager::transferManagedItems(src, dest, items, move,
+            [this, total, label, &throttle](const QString &file, int current) {
+                // Keep UI updates live without flooding its event queue for tiny files.
+                if (current != 1 && current != total && throttle.elapsed() < 33) return;
+                throttle.restart();
+                emit statusUpdate(QString("%1 (%2) — %3 / %4 files").arg(label, file).arg(current).arg(total));
+                emit launchProgress(total ? current * 100 / total : 100);
+            });
+    });
+    watcher->setFuture(m_transferFuture);
+}
+
+QString GameLauncher::linuxAppDataPath(const QString &saveFolderName, bool useProton) const {
+    return Settings::gameSaveDir(saveFolderName, useProton);
 }
 
 QString GameLauncher::localMarkerPath(const QString &localAppDataPath) {
@@ -178,11 +243,12 @@ GameLauncher::PrepResult GameLauncher::prepareLocalAppData(const QString &localP
         const QString recoveryPath = hasPrimary
             ? info.value("localAppDataPath").toString(linuxAppDataPath(prevData.value("saveFolderName").toString()))
             : localPath;
-        InstanceManager::transferManagedItems(
+        const bool recovered = InstanceManager::transferManagedItems(
             recoveryPath, targetDir,
             InstanceManager::getManagedItems(prevData.value("isGeodeCompatible").toBool(),
                                               prevData.value("useMegaHack").toBool()),
             true);
+        if (!recovered) { res.error = "Could not recover save data. Check disk space and permissions before retrying."; return res; }
         if (hasPrimary) QFile::remove(infoPath);
         removeLocalMarker(recoveryPath);
         GD_DEBUG_LOG("transfer", "Recovery transfer complete.");
@@ -220,7 +286,10 @@ GameLauncher::PrepResult GameLauncher::prepareLocalAppData(const QString &localP
         jf.open(QIODevice::WriteOnly);
         jf.write(QJsonDocument(instanceData).toJson(QJsonDocument::Indented));
         jf.close();
-        InstanceManager::transferManagedItems(localPath, newInstancePath, foundInAppData, true);
+        if (!InstanceManager::transferManagedItems(localPath, newInstancePath, foundInAppData, true)) {
+            res.error = "Could not import save data. Check disk space and permissions.";
+            return res;
+        }
         GD_DEBUG_LOG("transfer", "Import complete.");
         res.success = true; res.found = true;
     } else if (box.clickedButton() == trashBtn) {
@@ -228,7 +297,10 @@ GameLauncher::PrepResult GameLauncher::prepareLocalAppData(const QString &localP
                                      QDateTime::currentDateTimeUtc().toString("yyyy-MM-ddTHH-mm-ss-zzz");
         GD_DEBUG_LOG("transfer", QString("Moving unmanaged data to trash: %1").arg(trashFolder));
         QDir().mkpath(trashFolder);
-        InstanceManager::transferManagedItems(localPath, trashFolder, foundInAppData, true);
+        if (!InstanceManager::transferManagedItems(localPath, trashFolder, foundInAppData, true)) {
+            res.error = "Could not move unmanaged data to trash.";
+            return res;
+        }
         GD_DEBUG_LOG("transfer", "Moved to trash.");
         res.success = true; res.found = true;
     } else {
@@ -270,6 +342,7 @@ void GameLauncher::launchInstance(const QString &instanceName) {
     m_launching = true;
 
     const bool useProton = kIsLinux && Settings::load().useProtonGE;
+    m_pendingTool.clear();
     if (useProton && !m_protonReady) {
         m_pendingInstance = instanceName;
         m_protonManager->ensureReady();
@@ -378,15 +451,13 @@ void GameLauncher::launchInstance(const QString &instanceName) {
                                                           data.value("useMegaHack").toBool());
     GD_DEBUG_LOG("transfer", QString("Copying instance -> game save folder (%1): %2")
         .arg(ctx.localAppDataPath, ctx.managedItems.join(", ")));
-    InstanceManager::transferManagedItems(instancePath, ctx.localAppDataPath, ctx.managedItems, false,
-        [this, instanceName](const QString &file, int current) {
-            emit statusUpdate(QString("Preparing instance %1 (%2) — %3 files").arg(instanceName, file).arg(current));
-            // Logged every 25 files instead of per-file -- geode/mods or large custom-level
-            // folders can easily be thousands of files, which would otherwise flood the console.
-            if (current % 25 == 0) GD_DEBUG_LOG("transfer", QString("  ...%1 files copied so far (%2)").arg(current).arg(file));
-        });
-    GD_DEBUG_LOG("transfer", "Instance prep transfer complete.");
+    transferAsync(instancePath, ctx.localAppDataPath, ctx.managedItems, false,
+                  "Preparing " + instanceName, [this, ctx, useProton]() { startPrepared(ctx, useProton); });
+}
 
+void GameLauncher::startPrepared(LaunchContext ctx, bool useProton) {
+    const QString instanceName = ctx.instanceName;
+    const QJsonObject data = ctx.data;
     QJsonObject infoJson; infoJson["instanceName"] = instanceName;
     infoJson["localAppDataPath"] = ctx.localAppDataPath;
     QFile infoOut(ctx.infoJsonPath);
@@ -399,13 +470,16 @@ void GameLauncher::launchInstance(const QString &instanceName) {
     emit statusUpdate(QString("Launching %1...").arg(instanceName));
     GD_DEBUG_LOG("launch", QString("Spawning process: %1 (cwd=%2)").arg(ctx.exePath, ctx.versionPath));
 
+    m_processTracker.reset();
     m_gameProcess = new QProcess(this);
+    m_processTracker.configureProcess(m_gameProcess);
     m_gameProcess->setWorkingDirectory(ctx.versionPath);
     if (kIsLinux) {
         QProcessEnvironment env = useProton ? ProtonManager::environment() : QProcessEnvironment::systemEnvironment();
         if (data.value("isGeodeCompatible").toBool(false)) {
             env.insert("WINEDLLOVERRIDES", "xinput1_4=n,b");
         }
+        env.insert("GDLAUNCHER_SESSION", m_processTracker.token());
         m_gameProcess->setProcessEnvironment(env);
         if (useProton) m_gameProcess->start("python3", {ProtonManager::launcherPath(), ctx.exePath});
         else m_gameProcess->start("wine", {ctx.exePath});
@@ -442,11 +516,11 @@ void GameLauncher::launchInstance(const QString &instanceName) {
 }
 
 void GameLauncher::beginMonitor(LaunchContext ctx) {
-    GD_DEBUG_LOG("launch", QString("Watching process '%1' every 2s").arg(ctx.processName));
+    GD_DEBUG_LOG("launch", QString("Watching launched process '%1'").arg(ctx.processName));
     m_monitorTimer = new QTimer(this);
-    m_monitorTimer->setInterval(2000);
+    m_monitorTimer->setInterval(250);
     connect(m_monitorTimer, &QTimer::timeout, this, [this, ctx, seenGame = false]() mutable {
-        const bool running = checkProcessRunning(ctx.processName);
+        const bool running = m_processTracker.isRunning(ctx.processName);
         if (running) seenGame = true;
         // UMU may need time to enter the runtime before the Windows process appears.
         if (!seenGame && m_gameProcess && m_gameProcess->state() != QProcess::NotRunning) return;
@@ -461,8 +535,8 @@ void GameLauncher::beginMonitor(LaunchContext ctx) {
                 m_gameRunning = false;
                 emit gameStopped();
                 emit logStatusChanged(false);
+                ctx.launchError = "Launch failed: " + error;
                 postLaunchCleanup(ctx);
-                emit statusUpdate("Launch failed: " + error);
                 return;
             }
             watchForExit(ctx);
@@ -486,7 +560,7 @@ void GameLauncher::watchForExit(LaunchContext ctx) {
     emit statusUpdate(QString("Process ended. Waiting %1s for restart check...").arg(ctx.syncDelay / 1000));
 
     QTimer::singleShot(ctx.syncDelay, this, [this, ctx]() mutable {
-        const bool restarted = checkProcessRunning(ctx.processName);
+        const bool restarted = m_processTracker.isRunning(ctx.processName);
         if (!restarted) {
             GD_DEBUG_LOG("launch", "No restart detected; proceeding to sync.");
             m_gameRunning = false;
@@ -513,13 +587,11 @@ void GameLauncher::postLaunchCleanup(LaunchContext ctx) {
         .arg(ctx.instanceName, ctx.managedItems.join(", ")));
 
     const QString instancePath = Settings::instancesDir() + "/" + ctx.instanceName;
-    InstanceManager::transferManagedItems(ctx.localAppDataPath, instancePath, ctx.managedItems, true,
-        [this, ctx](const QString &file, int current) {
-            emit statusUpdate(QString("Syncing %1 (%2) — %3 files").arg(ctx.instanceName, file).arg(current));
-            if (current % 25 == 0) GD_DEBUG_LOG("transfer", QString("  ...%1 files synced so far (%2)").arg(current).arg(file));
-        });
-    GD_DEBUG_LOG("transfer", "Sync-back complete.");
+    transferAsync(ctx.localAppDataPath, instancePath, ctx.managedItems, true,
+                  "Syncing " + ctx.instanceName, [this, ctx]() { finishCleanup(ctx); });
+}
 
+void GameLauncher::finishCleanup(LaunchContext ctx) {
     if (m_gameProcess) {
         // UMU can still be finishing runtime cleanup after the Windows process
         // exits. Let the wrapper finish instead of killing it during sync-back.
@@ -544,12 +616,12 @@ void GameLauncher::postLaunchCleanup(LaunchContext ctx) {
 
     const AppSettings settings = Settings::load();
     GD_DEBUG_LOG("launch", QString("Launch/sync cycle finished for '%1'").arg(ctx.instanceName));
-    if (settings.closeBehavior == "Close After Game Ends") {
+    if (ctx.launchError.isEmpty() && settings.closeBehavior == "Close After Game Ends") {
         GD_DEBUG_LOG("launch", "close_behavior=Close After Game Ends; quitting.");
         qApp->quit();
     } else {
         emit launchComplete();
-        emit statusUpdate("Ready");
+        emit statusUpdate(ctx.launchError.isEmpty() ? "Ready" : ctx.launchError);
     }
 }
 
@@ -591,17 +663,8 @@ void GameLauncher::deployGeodeLogModIfNeeded(const LaunchContext &ctx) {
 }
 
 void GameLauncher::terminateGame() {
-    if (m_gameProcess) {
-        if (kIsLinux) {
-            QProcess::execute("pkill", {"-9", "-f", "GeometryDash.exe"});
-        } else {
-            m_gameProcess->kill();
-        }
-    }
-    if (m_monitorTimer) { m_monitorTimer->stop(); m_monitorTimer->deleteLater(); m_monitorTimer = nullptr; }
-    m_gameRunning = false;
-    if (m_gameProcess) { m_gameProcess->deleteLater(); m_gameProcess = nullptr; }
-    emit gameStopped();
-    emit logStatusChanged(false);
-    emit statusUpdate("Game terminated");
+    m_processTracker.terminate();
+    if (m_gameProcess) m_gameProcess->kill();
+    // Keep monitoring so the normal exit path syncs this instance's saves back.
+    emit statusUpdate("Stopping the launched game...");
 }

@@ -21,9 +21,7 @@ extern "C" {
 #include "miniz.h"
 }
 
-static const char *REMOTE_VERSIONS_URL = "http://api.pcpapc172.ir/archive/versions.json";
-
-VersionManager::VersionManager(QObject *parent) : QObject(parent) {
+VersionManager::VersionManager(QObject *parent, const QUrl &catalogUrl) : QObject(parent), m_catalogUrl(catalogUrl) {
     // extractionProgress is emitted from a background thread (see downloadVersion); Qt queues
     // it onto this object's own thread automatically since the receiver lives here, so it's
     // safe to update m_operations (which the UI thread also reads) only from this slot.
@@ -118,35 +116,40 @@ bool VersionManager::deleteVersion(const QString &versionPath, QString *error) {
 }
 
 void VersionManager::fetchRemoteVersions() {
-    QNetworkRequest req{QUrl(REMOTE_VERSIONS_URL)};
+    if (m_fetching) return;
+    m_fetching = true;
+    QNetworkRequest req{m_catalogUrl};
+    req.setTransferTimeout(60000);
     QNetworkReply *reply = m_net.get(req);
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         reply->deleteLater();
+        m_fetching = false;
+        if (reply->error() != QNetworkReply::NoError) {
+            emit remoteVersionsError(reply->errorString());
+            return;
+        }
+        QJsonParseError error;
+        const auto doc = QJsonDocument::fromJson(reply->readAll(), &error);
+        if (error.error != QJsonParseError::NoError || !doc.isArray()) {
+            emit remoteVersionsError(error.error != QJsonParseError::NoError
+                ? "Invalid version catalogue: " + error.errorString()
+                : "Invalid version catalogue: expected a JSON array.");
+            return;
+        }
         QJsonArray result;
-        if (reply->error() == QNetworkReply::NoError) {
-            QJsonParseError err;
-            QJsonDocument doc = QJsonDocument::fromJson(reply->readAll(), &err);
-            if (err.error == QJsonParseError::NoError && doc.isArray()) {
-                for (const QJsonValue &v : doc.array()) {
-                    QJsonObject o = v.toObject();
-                    // The remote manifest only carries id/category/version/name/url (no
-                    // "path"); the on-disk layout is always <category>/<version>, so derive
-                    // it rather than trusting a "path" field that doesn't exist. Using a
-                    // missing field previously meant every entry resolved to the Versions
-                    // root directory (which always exists) and showed as installed.
-                    const QString category = o.value("category").toString();
-                    const QString version = o.value("version").toString();
-                    QString path = o.value("path").toString();
-                    if (path.isEmpty()) path = category + "/" + version;
-                    o["path"] = path;
-                    o["id"] = path;
-
-                    const bool installed = !path.isEmpty() && QFileInfo::exists(Settings::versionsDir() + "/" + path);
-                    o["isInstalled"] = installed;
-                    o["size"] = installed ? QString() : QString("Unknown");
-                    result.push_back(o);
-                }
+        for (const auto &value : doc.array()) {
+            QJsonObject version = value.toObject();
+            QString path = version.value("path").toString();
+            if (path.isEmpty()) path = version.value("category").toString() + "/" + version.value("version").toString();
+            if (!value.isObject() || path == "/" || path.isEmpty() || version.value("url").toString().isEmpty()) {
+                emit remoteVersionsError("Invalid version catalogue: an entry is missing its version path or download URL.");
+                return;
             }
+            version["path"] = path;
+            version["id"] = path;
+            version["isInstalled"] = QFileInfo::exists(Settings::versionsDir() + "/" + path);
+            version["size"] = version["isInstalled"].toBool() ? QString() : QString("Unknown");
+            result.push_back(version);
         }
         emit remoteVersionsReady(result);
     });
@@ -176,12 +179,15 @@ void VersionManager::resolveSizes(const QJsonArray &versions) {
         if (url.isEmpty()) { emit sizeResolved(id, "Unknown"); continue; }
 
         QNetworkRequest req{QUrl(url)};
+        req.setTransferTimeout(30000);
         QNetworkReply *reply = m_net.head(req);
         connect(reply, &QNetworkReply::finished, this, [this, reply, id]() {
             reply->deleteLater();
-            if (reply->error() != QNetworkReply::NoError) { emit sizeResolved(id, "Unknown"); return; }
+            if (reply->error() != QNetworkReply::NoError) {
+                emit sizeResolutionError(id, reply->errorString()); return;
+            }
             const QVariant lenHeader = reply->header(QNetworkRequest::ContentLengthHeader);
-            if (!lenHeader.isValid()) { emit sizeResolved(id, "Unknown"); return; }
+            if (!lenHeader.isValid()) { emit sizeResolutionError(id, "Server did not report a file size."); return; }
             emit sizeResolved(id, formatBytes(lenHeader.toLongLong()));
         });
     }
@@ -327,27 +333,35 @@ void VersionManager::downloadVersion(const QJsonObject &version) {
     }
 
     QNetworkRequest req{QUrl(url)};
+    req.setTransferTimeout(60000);
     QNetworkReply *reply = m_net.get(req);
     m_activeReplies[id] = reply;
 
-    connect(reply, &QNetworkReply::readyRead, this, [reply, outFile]() {
-        outFile->write(reply->readAll());
-    });
+    auto writeFailed = std::make_shared<bool>(false);
+    auto consume = [reply, outFile, writeFailed]() {
+        const auto bytes = reply->readAll();
+        if (outFile->write(bytes) != bytes.size()) { *writeFailed = true; reply->abort(); }
+    };
+    connect(reply, &QNetworkReply::readyRead, this, consume);
     connect(reply, &QNetworkReply::downloadProgress, this, [this, id](qint64 recv, qint64 total) {
         if (auto it = m_operations.find(id); it != m_operations.end()) { it->current = recv; it->total = total; }
         emit downloadProgress(id, recv, total);
     });
-    connect(reply, &QNetworkReply::finished, this, [this, reply, outFile, id, versionPath, tmpZip]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, outFile, id, versionPath, tmpZip, consume, writeFailed]() {
+        if (reply->error() == QNetworkReply::NoError) consume();
+        const bool flushed = outFile->flush();
         outFile->close();
         m_activeReplies.remove(id);
         const bool wasAborted = reply->error() == QNetworkReply::OperationCanceledError;
         reply->deleteLater();
 
-        if (reply->error() != QNetworkReply::NoError) {
+        if (reply->error() != QNetworkReply::NoError || *writeFailed || !flushed) {
             outFile->deleteLater();
             QFile::remove(tmpZip);
             m_operations.remove(id);
-            emit downloadFinished(id, false, wasAborted ? "Cancelled" : reply->errorString());
+            emit downloadFinished(id, false, *writeFailed || !flushed
+                ? "Could not write the download. Check disk space and permissions."
+                : wasAborted ? "Cancelled" : reply->errorString());
             return;
         }
         outFile->deleteLater();

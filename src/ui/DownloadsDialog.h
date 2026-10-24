@@ -10,6 +10,7 @@ class QLabel;
 class QVBoxLayout;
 class QGridLayout;
 class QScrollArea;
+class QPushButton;
 
 // Port of the Downloads modal (version manager) from index.html/renderer.js.
 // The VersionManager itself is owned by MainWindow, not this dialog, so an
@@ -23,6 +24,9 @@ public:
 private:
     VersionManager *m_versionManager;
     QLineEdit *m_searchEdit;
+    QLabel *m_fetchStatus;
+    QLabel *m_operationStatus;
+    QPushButton *m_retry;
     QWidget *m_statsWidget;
     QWidget *m_listWidget;
     QVBoxLayout *m_listLayout;

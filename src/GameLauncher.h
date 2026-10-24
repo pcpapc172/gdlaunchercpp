@@ -6,6 +6,9 @@
 #include <QProcess>
 #include <QTimer>
 #include <QWidget>
+#include "ProcessTracker.h"
+#include <functional>
+#include <QFuture>
 
 class ProtonManager;
 
@@ -15,14 +18,17 @@ class GameLauncher : public QObject {
     Q_OBJECT
 public:
     explicit GameLauncher(QWidget *dialogParent, QObject *parent = nullptr);
+    ~GameLauncher() override;
 
     bool isGameRunning() const { return m_gameRunning; }
     bool isSyncing() const { return m_syncing; }
     bool isLaunching() const { return m_launching; }
+    bool isToolRunning() const { return m_toolProcess != nullptr; }
 
     // Kicks off the (mostly synchronous, some async via timers) launch sequence.
     void launchInstance(const QString &instanceName);
     void terminateGame();
+    void runExecutable(const QString &executable, bool geodeCompatible = false);
 
     // Used on first run to offer importing pre-existing local save data.
     // Returns true if unmanaged files were found (and handled).
@@ -43,11 +49,16 @@ private:
     bool m_syncing = false;
     bool m_launching = false;
     QProcess *m_gameProcess = nullptr;
+    QProcess *m_toolProcess = nullptr;
     QTimer *m_monitorTimer = nullptr;
     QStringList m_logBuffer;
     ProtonManager *m_protonManager = nullptr;
     bool m_protonReady = false;
     QString m_pendingInstance;
+    QString m_pendingTool;
+    bool m_toolGeode = false;
+    ProcessTracker m_processTracker;
+    QFuture<bool> m_transferFuture;
 
     struct LaunchContext {
         QString instanceName;
@@ -65,6 +76,7 @@ private:
         // restart-detection/monitoring still needs to watch for the game process itself
         // (SmartSteamEmu is expected to launch it, not stay resident under its own name).
         QString gameProcessName;
+        QString launchError;
     };
 
     QString linuxAppDataPath(const QString &saveFolderName, bool useProton = false) const;
@@ -83,10 +95,14 @@ private:
                                   const QJsonObject &data);
     static void removeLocalMarker(const QString &localAppDataPath);
 
-    bool checkProcessRunning(const QString &processName) const;
     void beginMonitor(LaunchContext ctx);
+    void startPrepared(LaunchContext ctx, bool useProton);
+    void finishCleanup(LaunchContext ctx);
+    void transferAsync(const QString &src, const QString &dest, const QStringList &items,
+                       bool move, const QString &label, const std::function<void()> &done);
     void watchForExit(LaunchContext ctx);
     void postLaunchCleanup(LaunchContext ctx);
     void deployGeodeLogModIfNeeded(const LaunchContext &ctx);
     void appendLog(const QString &line);
+    void startTool();
 };

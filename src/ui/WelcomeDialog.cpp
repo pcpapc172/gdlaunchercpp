@@ -92,7 +92,6 @@ WelcomeDialog::WelcomeDialog(QWidget *parent) : QDialog(parent) {
     });
 
     goTo(0);
-    Animations::fadeIn(this);
 }
 
 void WelcomeDialog::goTo(int index) {

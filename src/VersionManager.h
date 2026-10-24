@@ -47,7 +47,8 @@ struct VersionOperation {
 class VersionManager : public QObject {
     Q_OBJECT
 public:
-    explicit VersionManager(QObject *parent = nullptr);
+    explicit VersionManager(QObject *parent = nullptr,
+                            const QUrl &catalogUrl = QUrl("http://api.pcpapc172.ir/archive/versions.json"));
 
     static QVector<LocalVersion> getVersions();
     static qint64 getVersionSize(const QString &versionPath);
@@ -56,6 +57,7 @@ public:
 
     // Async: emits remoteVersionsReady(json array) with isInstalled/size populated where possible
     void fetchRemoteVersions();
+    bool isFetching() const { return m_fetching; }
 
     // Async: downloads + extracts a version described by a JSON object {id, path, url, name}.
     // Keeps running even if nothing is listening to the progress signals.
@@ -77,6 +79,8 @@ public:
 
 signals:
     void remoteVersionsReady(const QJsonArray &versions);
+    void remoteVersionsError(const QString &error);
+    void sizeResolutionError(const QString &id, const QString &error);
     void sizeResolved(const QString &id, const QString &size);
     void downloadStarted(const QString &id);
     void downloadProgress(const QString &id, qint64 received, qint64 total);
@@ -88,6 +92,8 @@ signals:
 
 private:
     QNetworkAccessManager m_net;
+    QUrl m_catalogUrl;
+    bool m_fetching = false;
     QHash<QString, QNetworkReply *> m_activeReplies;
     QHash<QString, std::shared_ptr<std::atomic<bool>>> m_cancelFlags;
     QHash<QString, VersionOperation> m_operations;

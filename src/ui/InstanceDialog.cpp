@@ -166,7 +166,6 @@ InstanceDialog::InstanceDialog(QWidget *parent, bool editMode, const QJsonObject
     updateVersionTypeUI();
     updateGeodeLogUI();
 
-    Animations::fadeIn(this);
 }
 
 void InstanceDialog::populateVersions() {

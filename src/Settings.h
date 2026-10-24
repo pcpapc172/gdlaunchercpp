@@ -10,11 +10,7 @@ struct AppSettings {
     QString lastRunVersion;
     bool enableLogOutput = false;
     bool useProtonGE = false;
-    // How this copy of GDLauncher was installed, so an update knows which release asset to
-    // fetch and how to apply it: "portable" (zip/tar.gz -- download+extract, same as before),
-    // "nsis"/"msi" (Windows installers), or "deb"/"rpm" (Linux packages) -- the latter four all
-    // download the real installer/package and hand it off to run, instead of just extracting.
-    QString updatePackageType = "portable";
+    QString nongDownloadFolder = "%LOCALAPPDATA%/GeometryDash";
 
     QJsonObject toJson() const;
     static AppSettings fromJson(const QJsonObject &obj);
@@ -28,6 +24,8 @@ public:
     static QString versionsDir();
     static QString backupsDir();
     static QString settingsFile();
+    static QString installationType();
+    static QString gameSaveDir(const QString &saveFolderName, bool useProton = false);
 
     static void ensureDirs();
 

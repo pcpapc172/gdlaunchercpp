@@ -230,27 +230,27 @@ void InstanceManager::copyDir(const QString &src, const QString &dest) {
     }
 }
 
-void InstanceManager::copyDirWithProgress(const QString &src, const QString &dest, const QString &instanceRoot,
+bool InstanceManager::copyDirWithProgress(const QString &src, const QString &dest, const QString &instanceRoot,
                                            int &counter, const FileProgressCb &onFileProgress) {
-    QDir().mkpath(dest);
+    if (!QDir().mkpath(dest)) return false;
     QDir srcDir(src);
     const auto entries = srcDir.entryInfoList(QDir::NoDotAndDotDot | QDir::AllEntries);
     for (const QFileInfo &e : entries) {
         const QString destPath = dest + "/" + e.fileName();
         if (e.isDir()) {
-            copyDirWithProgress(e.filePath(), destPath, instanceRoot, counter, onFileProgress);
+            if (!copyDirWithProgress(e.filePath(), destPath, instanceRoot, counter, onFileProgress)) return false;
         } else {
-            counter++;
-            const QString relPath = QDir(instanceRoot).relativeFilePath(e.filePath());
-            if (onFileProgress) onFileProgress(relPath, counter);
-            QFile::copy(e.filePath(), destPath);
+            if (!QFile::copy(e.filePath(), destPath)) return false;
+            if (onFileProgress) onFileProgress(QDir(instanceRoot).relativeFilePath(e.filePath()), ++counter);
         }
     }
+    return true;
 }
 
-void InstanceManager::transferManagedItems(const QString &src, const QString &dest,
+bool InstanceManager::transferManagedItems(const QString &src, const QString &dest,
                                             const QStringList &managedItems, bool move,
                                             const FileProgressCb &onFileProgress) {
+    if (!QDir().mkpath(dest)) return false;
     int counter = 0;
     for (const QString &item : managedItems) {
         const QString srcPath = src + "/" + item;
@@ -258,24 +258,22 @@ void InstanceManager::transferManagedItems(const QString &src, const QString &de
         if (!QFileInfo::exists(srcPath)) continue;
         if (QFileInfo::exists(destPath)) {
             QFileInfo destInfo(destPath);
-            if (destInfo.isDir()) QDir(destPath).removeRecursively();
-            else QFile::remove(destPath);
+            if (destInfo.isDir()) { if (!QDir(destPath).removeRecursively()) return false; }
+            else if (!QFile::remove(destPath)) return false;
         }
         QFileInfo srcInfo(srcPath);
         if (srcInfo.isDir()) {
-            copyDirWithProgress(srcPath, destPath, src, counter, onFileProgress);
-            if (move) QDir(srcPath).removeRecursively();
+            if (!copyDirWithProgress(srcPath, destPath, src, counter, onFileProgress)) return false;
+            if (move && !QDir(srcPath).removeRecursively()) return false;
         } else {
-            counter++;
-            if (onFileProgress) onFileProgress(item, counter);
             if (move) {
                 if (!QFile::rename(srcPath, destPath)) {
-                    QFile::copy(srcPath, destPath);
-                    QFile::remove(srcPath);
+                    if (!QFile::copy(srcPath, destPath)) return false;
+                    if (!QFile::remove(srcPath)) return false;
                 }
-            } else {
-                QFile::copy(srcPath, destPath);
-            }
+            } else if (!QFile::copy(srcPath, destPath)) return false;
+            if (onFileProgress) onFileProgress(item, ++counter);
         }
     }
+    return true;
 }

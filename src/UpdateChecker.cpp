@@ -131,12 +131,11 @@ void UpdateChecker::check(bool isManual) {
             return;
         }
 
-        // Which asset to grab depends on how the user says they installed GDLauncher
-        // (Settings::updatePackageType) -- a portable zip/tar.gz, or a real installer/package
+        // Which asset to grab depends on how this GDLauncher executable was installed
+        // (Settings::installationType()) -- a portable zip/tar.gz, or a real installer/package
         // that release.yml also publishes (gdlauncher-windows-x86_64-installer.exe,
         // gdlauncher-windows-x86_64.msi, gdlauncher-<ver>-amd64.deb, gdlauncher-<ver>-1.x86_64.rpm).
-        const AppSettings settings = Settings::load();
-        const QString packageType = settings.updatePackageType;
+        const QString packageType = Settings::installationType();
         const bool isPortable = packageType != "nsis" && packageType != "msi" &&
                                  packageType != "deb" && packageType != "rpm";
         const QString wantExt = assetExtensionForPackageType(packageType);

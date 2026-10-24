@@ -59,6 +59,8 @@ set(APP_SOURCES
     src/VersionManager.cpp
     src/GameLauncher.cpp
     src/ProtonManager.cpp
+    src/ProcessTracker.cpp
+    src/NongManager.cpp
     src/ConsoleWindow.cpp
     src/UpdateChecker.cpp
     src/LogPipeServer.cpp
@@ -68,6 +70,7 @@ set(APP_SOURCES
     src/ui/InstanceDialog.cpp
     src/ui/SettingsDialog.cpp
     src/ui/DownloadsDialog.cpp
+    src/ui/NongDialog.cpp
     src/ui/SaveEditorDialog.cpp
     src/ui/Theme.cpp
     src/ui/Animations.cpp
@@ -84,6 +87,8 @@ set(APP_HEADERS
     src/VersionManager.h
     src/GameLauncher.h
     src/ProtonManager.h
+    src/ProcessTracker.h
+    src/NongManager.h
     src/ConsoleWindow.h
     src/UpdateChecker.h
     src/LogPipeServer.h
@@ -93,6 +98,7 @@ set(APP_HEADERS
     src/ui/InstanceDialog.h
     src/ui/SettingsDialog.h
     src/ui/DownloadsDialog.h
+    src/ui/NongDialog.h
     src/ui/SaveEditorDialog.h
     src/ui/Theme.h
     src/ui/Animations.h
@@ -118,6 +124,7 @@ if(GDLAUNCHER_DEBUG_LOGGING)
 endif()
 
 if(WIN32)
+    target_link_libraries(gdlauncher PRIVATE msi)
     if(GDLAUNCHER_DEBUG_LOGGING)
         # Keep the console subsystem for a debug-logging build: WIN32_EXECUTABLE detaches the
         # process from stdout/stderr entirely, so qDebug() output from GD_DEBUG_LOG would go
@@ -160,13 +167,13 @@ set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/resources/LICENSE.txt")
 # Debian/Ubuntu (.deb)
 set(CPACK_DEBIAN_PACKAGE_MAINTAINER "pcpapc172")
 set(CPACK_DEBIAN_PACKAGE_SECTION "games")
-set(CPACK_DEBIAN_PACKAGE_DEPENDS "libqt6core6, libqt6widgets6, libqt6network6, libqt6concurrent6, zlib1g, wine")
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "libqt6core6, libqt6widgets6, libqt6network6, libqt6concurrent6, libqt6svg6, zlib1g, wine")
 set(CPACK_DEBIAN_FILE_NAME "gdlauncher-${GDLAUNCHER_APP_VERSION}-amd64.deb")
 
 # Fedora/RHEL (.rpm)
 set(CPACK_RPM_PACKAGE_LICENSE "MIT")
 set(CPACK_RPM_PACKAGE_GROUP "Amusements/Games")
-set(CPACK_RPM_PACKAGE_REQUIRES "qt6-qtbase, zlib, wine")
+set(CPACK_RPM_PACKAGE_REQUIRES "qt6-qtbase, qt6-qtsvg, zlib, wine")
 set(CPACK_RPM_FILE_NAME "gdlauncher-${GDLAUNCHER_APP_VERSION}-1.x86_64.rpm")
 
 # Windows NSIS installer (.exe)
@@ -205,3 +212,25 @@ if(NOT CPACK_GENERATOR)
 endif()
 
 include(CPack)
+
+option(GDLAUNCHER_BUILD_TESTS "Build launcher regression checks" OFF)
+if(GDLAUNCHER_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    enable_testing()
+    qt_add_executable(launcher_checks
+        tests/LauncherChecks.cpp
+        src/GameLauncher.cpp src/GameLauncher.h
+        src/ProcessTracker.cpp src/ProcessTracker.h
+        src/NongManager.cpp src/NongManager.h
+        src/ui/NongDialog.cpp src/ui/NongDialog.h
+        src/VersionManager.cpp src/VersionManager.h
+        src/ui/DownloadsDialog.cpp src/ui/DownloadsDialog.h
+        src/ProtonManager.cpp src/ProtonManager.h
+        src/InstanceManager.cpp src/Settings.cpp src/DebugLog.cpp src/DebugLog.h
+        src/ui/SettingsDialog.cpp src/ui/SettingsDialog.h
+        src/ui/Theme.cpp src/ui/Animations.cpp src/ui/Animations.h
+        resources/resources.qrc)
+    target_include_directories(launcher_checks PRIVATE src)
+    target_link_libraries(launcher_checks PRIVATE Qt6::Widgets Qt6::Network Qt6::Concurrent miniz)
+    add_test(NAME launcher_regressions COMMAND launcher_checks)
+    set_tests_properties(launcher_regressions PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 45)
+endif()

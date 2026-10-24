@@ -14,9 +14,11 @@
 #include <QIcon>
 #include <QStyle>
 #include <QApplication>
+#include <QDesktopServices>
+#include <QUrl>
 
 SettingsDialog::SettingsDialog(QWidget *parent, const AppSettings &current, const QString &appVersion)
-    : QDialog(parent) {
+    : QDialog(parent), m_result(current) {
     setWindowTitle("Settings");
     setWindowIcon(QIcon(":/icon.png"));
     setMinimumWidth(420);
@@ -75,18 +77,8 @@ SettingsDialog::SettingsDialog(QWidget *parent, const AppSettings &current, cons
     advancedLayout->addWidget(protonHelp);
 #endif
 
-    advancedLayout->addWidget(new QLabel("How GDLauncher was installed (used for updates):", this));
-    m_updatePackageTypeCombo = new QComboBox(this);
-#if defined(Q_OS_WIN)
-    m_updatePackageTypeCombo->addItem("Portable (.zip)", "portable");
-    m_updatePackageTypeCombo->addItem("Installer (.exe)", "nsis");
-    m_updatePackageTypeCombo->addItem("Windows Installer (.msi)", "msi");
-#else
-    m_updatePackageTypeCombo->addItem("Portable (.tar.gz)", "portable");
-    m_updatePackageTypeCombo->addItem("Debian/Ubuntu Package (.deb)", "deb");
-    m_updatePackageTypeCombo->addItem("Fedora/RHEL Package (.rpm)", "rpm");
-#endif
-    advancedLayout->addWidget(m_updatePackageTypeCombo);
+    auto *installation = new QLabel("Installation detected automatically: " + Settings::installationType(), this);
+    advancedLayout->addWidget(installation);
     auto *updateHelp = new QLabel(
         "A portable copy downloads and extracts an update for you to move into place; an "
         "installer/package downloads it, closes GDLauncher, and runs it for you.", this);
@@ -101,6 +93,15 @@ SettingsDialog::SettingsDialog(QWidget *parent, const AppSettings &current, cons
     footer->setObjectName("subtext");
     footer->setAlignment(Qt::AlignCenter);
     root->addWidget(footer);
+
+    auto *sourceBtn = new QPushButton(QIcon(current.theme == "Dark" ? ":/github-light.svg" : ":/github-dark.svg"), "Source code", this);
+    sourceBtn->setObjectName("sourceCodeButton");
+    sourceBtn->setIconSize(QSize(20, 20));
+    sourceBtn->setToolTip("View GDLauncher on GitHub");
+    root->addWidget(sourceBtn);
+    connect(sourceBtn, &QPushButton::clicked, this, []() {
+        QDesktopServices::openUrl(QUrl("https://github.com/pcpapc172/gdlaunchercpp"));
+    });
 
     auto *btnRow = new QHBoxLayout();
     btnRow->setSpacing(UiMetrics::kTightSpacing);
@@ -121,10 +122,7 @@ SettingsDialog::SettingsDialog(QWidget *parent, const AppSettings &current, cons
     m_darkRadio->setChecked(current.theme == "Dark");
     m_syncDelaySpin->setValue(current.syncDelay);
     m_logOutputCheck->setChecked(current.enableLogOutput);
-    {
-        const int idx = m_updatePackageTypeCombo->findData(current.updatePackageType);
-        m_updatePackageTypeCombo->setCurrentIndex(idx >= 0 ? idx : 0);
-    }
+
 
     connect(checkUpdatesBtn, &QPushButton::clicked, this, &SettingsDialog::checkUpdatesRequested);
     connect(openDataBtn, &QPushButton::clicked, this, &SettingsDialog::openDataFolderRequested);
@@ -134,10 +132,8 @@ SettingsDialog::SettingsDialog(QWidget *parent, const AppSettings &current, cons
         m_result.syncDelay = m_syncDelaySpin->value();
         m_result.enableLogOutput = m_logOutputCheck->isChecked();
         m_result.useProtonGE = m_protonGECheck ? m_protonGECheck->isChecked() : current.useProtonGE;
-        m_result.updatePackageType = m_updatePackageTypeCombo->currentData().toString();
         m_result.lastRunVersion = appVersion;
         accept();
     });
 
-    Animations::fadeIn(this);
 }

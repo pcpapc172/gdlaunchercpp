@@ -168,7 +168,6 @@ SaveEditorDialog::SaveEditorDialog(QWidget *parent) : QDialog(parent) {
 
     if (m_instanceCombo->count() > 0) onInstanceChanged();
 
-    Animations::fadeIn(this);
 }
 
 void SaveEditorDialog::selectInstance(const QString &name) {

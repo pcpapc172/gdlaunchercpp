@@ -47,6 +47,22 @@ DownloadsDialog::DownloadsDialog(QWidget *parent, VersionManager *versionManager
     m_searchEdit->setPlaceholderText("Search versions...");
     root->addWidget(m_searchEdit);
 
+    auto *fetchRow = new QHBoxLayout;
+    m_fetchStatus = new QLabel("Fetching versions...", this);
+    m_fetchStatus->setObjectName("versionFetchStatus");
+    m_fetchStatus->setWordWrap(true);
+    m_fetchStatus->setTextFormat(Qt::PlainText);
+    m_retry = new QPushButton("Refresh", this);
+    m_retry->setObjectName("versionRetry");
+    fetchRow->addWidget(m_fetchStatus, 1);
+    fetchRow->addWidget(m_retry);
+    root->addLayout(fetchRow);
+    m_operationStatus = new QLabel(this);
+    m_operationStatus->setWordWrap(true);
+    m_operationStatus->setTextFormat(Qt::PlainText);
+    root->addWidget(m_operationStatus);
+    connect(m_retry, &QPushButton::clicked, this, &DownloadsDialog::refresh);
+
     auto *scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
@@ -68,10 +84,34 @@ DownloadsDialog::DownloadsDialog(QWidget *parent, VersionManager *versionManager
     connect(m_searchEdit, &QLineEdit::textChanged, this, [this](const QString &text) { renderList(text); });
 
     connect(m_versionManager, &VersionManager::remoteVersionsReady, this, [this](const QJsonArray &versions) {
+        m_retry->setEnabled(true);
+        m_retry->setText("Refresh");
+        m_fetchStatus->setText(versions.isEmpty() ? "The server returned no versions." : QString("%1 versions available.").arg(versions.size()));
         m_versions = versions;
         renderStats();
         renderList(m_searchEdit->text());
         m_versionManager->resolveSizes(m_versions);
+    });
+    connect(m_versionManager, &VersionManager::remoteVersionsError, this, [this](const QString &error) {
+        m_fetchStatus->setText("Could not fetch versions: " + error);
+        m_retry->setText("Retry");
+        m_retry->setEnabled(true);
+    });
+    connect(m_versionManager, &VersionManager::sizeResolutionError, this, [this](const QString &id, const QString &error) {
+        for (int i = 0; i < m_versions.size(); ++i) {
+            auto version = m_versions[i].toObject();
+            if (version.value("id").toString() == id) {
+                version["size"] = "Size unavailable: " + error;
+                m_versions[i] = version;
+                break;
+            }
+        }
+        if (auto *card = m_cardWidgets.value(id)) {
+            if (auto *label = card->findChild<QLabel *>("sizeLabel")) {
+                label->setText("Size unavailable: " + error);
+                label->setWordWrap(true);
+            }
+        }
     });
     connect(m_versionManager, &VersionManager::sizeResolved, this, [this](const QString &id, const QString &size) {
         for (int i = 0; i < m_versions.size(); ++i) {
@@ -112,16 +152,16 @@ DownloadsDialog::DownloadsDialog(QWidget *parent, VersionManager *versionManager
         if (auto *label = card->findChild<QLabel *>("progressLabel")) label->setText(QString("Extracting... %1%").arg(pct));
     });
     connect(m_versionManager, &VersionManager::downloadFinished, this, [this](const QString &id, bool success, const QString &message) {
-        Q_UNUSED(id);
-        if (!success && message != "Cancelled") QMessageBox::warning(this, "Download failed", message.isEmpty() ? "Download failed" : message);
+        m_operationStatus->setText(success ? "Installed " + id : id + ": " + (message.isEmpty() ? "Download failed" : message));
         refresh();
     });
 
     refresh();
-    Animations::fadeIn(this);
 }
 
 void DownloadsDialog::refresh() {
+    m_fetchStatus->setText("Fetching versions...");
+    m_retry->setEnabled(false);
     m_versionManager->fetchRemoteVersions();
 }
 

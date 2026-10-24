@@ -3,5 +3,7 @@
         <file>icon.png</file>
         <file>check.png</file>
         <file>radio_dot.png</file>
+        <file>github-light.svg</file>
+        <file>github-dark.svg</file>
     </qresource>
 </RCC>

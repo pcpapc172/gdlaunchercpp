@@ -48,7 +48,48 @@ cmake --build build -j$(nproc)
 ./build/gdlauncher
 ```
 
-On Debian/Ubuntu: `apt install qt6-base-dev zlib1g-dev build-essential cmake`.
+On Debian/Ubuntu: `apt install qt6-base-dev libqt6svg6 zlib1g-dev build-essential cmake`.
+
+## Launching and updates
+
+The launcher tracks its own game process family, so another running copy with
+the same executable name does not prevent save sync. Save copying and sync-back
+run in a worker thread, with the current filename, file count, and percentage
+shown live in the main window.
+
+On Linux, **Launch executable** runs a chosen Windows executable and **Open
+Explorer** opens Windows Explorer, using the Wine or GE-Proton backend selected
+in Settings and its corresponding prefix. These tools do not swap instance saves.
+Close the tool before launching an instance.
+
+**NONG Downloader** browses SongFileHub's catalogue, searches by song/level name,
+ID, or creator, and downloads songs as `[ID].mp3` or `[ID].ogg`. Downloads show
+progress and continue if the menu is closed. The folder defaults to
+`%LOCALAPPDATA%/GeometryDash`; enter `%LOCALAPPDATA%/custom` or use **Browse** to
+choose another folder. On Linux, `%LOCALAPPDATA%` refers to the selected Wine or
+GE-Proton prefix. The selected folder is remembered.
+
+When a song already exists, **Replace** renames it to `[ID].mp3.original` or
+`[ID].ogg.original` before installing the completed download. Further replacements
+keep that first backup, including when switching audio formats. **Restore
+original** restores the backup for that song and folder. Failed or cancelled
+downloads leave the current song intact. Both download menus display fetch and
+download errors and offer a refresh/retry action. Window fades and progress-bar
+animations have been removed.
+
+Updates automatically detect whether this executable belongs to a Debian/RPM
+package, a Windows NSIS/MSI installation, or a portable copy. Settings shows the
+detected type. Its **Source code** button opens this repository, using a GitHub
+SVG icon with contrasting colors in light and dark themes. The icon is from
+[Simple Icons](https://github.com/simple-icons/simple-icons) (CC0).
+
+To run the Linux regression checks:
+
+```sh
+cmake -S . -B build -DGDLAUNCHER_BUILD_TESTS=ON
+cmake --build build -j$(nproc)
+ctest --test-dir build --output-on-failure
+```
 
 ## GE-Proton on Linux
 

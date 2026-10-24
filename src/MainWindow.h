@@ -13,6 +13,7 @@ class GameLauncher;
 class UpdateChecker;
 class ConsoleWindow;
 class LogPipeServer;
+class NongManager;
 class QPlainTextEdit;
 class QDialog;
 class QCloseEvent;
@@ -36,6 +37,7 @@ private slots:
     void onSettings();
     void onDownloads();
     void onEditor();
+    void onNong();
 
 private:
     QTableWidget *m_table;
@@ -45,13 +47,17 @@ private:
     QPushButton *m_deleteBtn;
     QPushButton *m_downloadBtn;
     QPushButton *m_editorBtn;
+    QPushButton *m_nongBtn;
     QPushButton *m_settingsBtn;
+    QPushButton *m_runExeBtn = nullptr;
+    QPushButton *m_explorerBtn = nullptr;
     AnimatedProgressBar *m_progressBar;
     QLabel *m_statusLabel;
 
     GameLauncher *m_launcher;
     UpdateChecker *m_updateChecker;
     VersionManager *m_versionManager;
+    NongManager *m_nongManager;
     ConsoleWindow *m_consoleWindow = nullptr;
     LogPipeServer *m_logPipe;
 
@@ -65,4 +71,5 @@ private:
     void appendLog(const QString &line);
     QString selectedInstanceName() const;
     void runStartupChecks();
+    void runLinuxTool(bool explorer);
 };

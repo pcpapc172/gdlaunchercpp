@@ -3,6 +3,8 @@
 #include "UpdateChecker.h"
 #include "ConsoleWindow.h"
 #include "LogPipeServer.h"
+#include "NongManager.h"
+#include "ui/NongDialog.h"
 #include "InstanceManager.h"
 #include "ui/InstanceDialog.h"
 #include "ui/SettingsDialog.h"
@@ -33,6 +35,7 @@
 #include <QStyle>
 #include <QApplication>
 #include <QIcon>
+#include <QFileDialog>
 
 static QString formatSize(qint64 bytes) {
     if (bytes < 0) return "…";
@@ -91,9 +94,20 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     m_deleteBtn->setObjectName("danger");
     m_downloadBtn = new QPushButton(style->standardIcon(QStyle::SP_ArrowDown), "Downloads", this);
     m_editorBtn = new QPushButton(style->standardIcon(QStyle::SP_FileDialogContentsView), "Save Editor", this);
+    m_nongBtn = new QPushButton(style->standardIcon(QStyle::SP_MediaVolume), "NONG Downloader", this);
     m_settingsBtn = new QPushButton(style->standardIcon(QStyle::SP_ComputerIcon), "Settings", this);
-    for (QPushButton *b : {m_launchBtn, m_createBtn, m_editBtn, m_deleteBtn, m_downloadBtn, m_editorBtn, m_settingsBtn})
+    for (QPushButton *b : {m_launchBtn, m_createBtn, m_editBtn, m_deleteBtn, m_downloadBtn, m_editorBtn, m_nongBtn, m_settingsBtn})
         btnCol->addWidget(b);
+#ifdef Q_OS_LINUX
+    m_runExeBtn = new QPushButton(style->standardIcon(QStyle::SP_MediaPlay), "Launch executable", this);
+    m_explorerBtn = new QPushButton(style->standardIcon(QStyle::SP_DirOpenIcon), "Open Explorer", this);
+    m_runExeBtn->setToolTip("Run an executable using the Wine or GE-Proton backend selected in Settings");
+    m_explorerBtn->setToolTip("Open Windows Explorer in the selected Wine or GE-Proton prefix");
+    btnCol->addWidget(m_runExeBtn);
+    btnCol->addWidget(m_explorerBtn);
+    connect(m_runExeBtn, &QPushButton::clicked, this, [this]() { runLinuxTool(false); });
+    connect(m_explorerBtn, &QPushButton::clicked, this, [this]() { runLinuxTool(true); });
+#endif
     btnCol->addStretch();
     mainRow->addLayout(btnCol);
 
@@ -118,6 +132,10 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     // Owned here (not by DownloadsDialog) so an in-flight download/extraction survives the
     // dialog being closed and reopened.
     m_versionManager = new VersionManager(this);
+    m_nongManager = new NongManager(this);
+    connect(m_nongManager, &NongManager::downloadFinished, this, [this](const QString &, bool success, const QString &message) {
+        m_statusLabel->setText(success ? "NONG song downloaded" : "NONG download: " + message);
+    });
     m_logPipe = new LogPipeServer(this);
 
     connect(m_versionManager, &VersionManager::downloadFinished, this, [this](const QString &id, bool success, const QString &message) {
@@ -159,6 +177,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     connect(m_deleteBtn, &QPushButton::clicked, this, &MainWindow::onDelete);
     connect(m_downloadBtn, &QPushButton::clicked, this, &MainWindow::onDownloads);
     connect(m_editorBtn, &QPushButton::clicked, this, &MainWindow::onEditor);
+    connect(m_nongBtn, &QPushButton::clicked, this, &MainWindow::onNong);
     connect(m_settingsBtn, &QPushButton::clicked, this, &MainWindow::onSettings);
 
     connect(m_launcher, &GameLauncher::statusUpdate, this, [this](const QString &msg) { m_statusLabel->setText(msg); });
@@ -183,7 +202,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
             m_consoleWindow->activateWindow();
         }
     });
-    connect(m_launcher, &GameLauncher::gameStopped, this, [this]() { setUiEnabled(true); });
+    // Controls stay disabled until asynchronous save sync emits launchComplete.
     connect(m_launcher, &GameLauncher::logLine, this, &MainWindow::appendLog);
     connect(m_launcher, &GameLauncher::logStatusChanged, this, [this](bool running) {
         if (m_consoleWindow) m_consoleWindow->setRunning(running);
@@ -198,7 +217,6 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     });
 
     refreshInstances();
-    Animations::fadeIn(this);
 
     QTimer::singleShot(3000, this, [this]() {
         if (!m_launcher->isLaunching() && !m_launcher->isGameRunning()) m_updateChecker->check(false);
@@ -238,11 +256,14 @@ void MainWindow::runStartupChecks() {
         Settings::save(m_settings);
 
         const QStringList entries = {
-            "Added a Linux option to download GE-Proton and launch with UMULauncher, with installation progress in the main window.",
-            "Ported the launcher to a native C++/Qt6 build for a smaller footprint and lower resource usage.",
-            "Fixed the Downloads list incorrectly marking every version as installed.",
-            "Refreshed the interface with a consistent theme, iconography, and animated transitions.",
-            "The app now keeps its own data directory, separate from the previous Electron build."
+            "Game tracking now follows the launched process and its children, ignoring unrelated games with the same executable name.",
+            "Updates automatically detect how this copy of GDLauncher was installed; the manual installation-type setting has been removed.",
+            "Added Linux actions to launch a Windows executable or open Windows Explorer using the selected Wine or GE-Proton/UMU backend.",
+            "Save copying and sync-back now run without freezing the interface, with live filenames, file counts, and progress in the main window.",
+            "Added a Source code button in Settings with a GitHub SVG icon that stays readable in light and dark themes.",
+            "Added a SongFileHub NONG Downloader with search, download progress, custom folders, replacement backups, and Restore original.",
+            "Download menus now show fetch, parsing, size lookup, and download errors with a way to retry.",
+            "Removed window fades and animated progress transitions."
         };
         ChangelogDialog dlg(this, m_appVersion, entries);
         dlg.exec();
@@ -250,6 +271,11 @@ void MainWindow::runStartupChecks() {
 }
 
 void MainWindow::closeEvent(QCloseEvent *event) {
+    if (m_launcher && m_launcher->isToolRunning()) {
+        QMessageBox::information(this, "Windows Tool Running", "Close the Windows executable or Explorer window before closing GDLauncher.");
+        event->ignore();
+        return;
+    }
     // The instance->save-folder sync-back only happens once GameLauncher detects the game
     // process has exited -- closing the app while it's still running skips that entirely, so
     // whatever the player just did in-game never makes it back into the instance's save data.
@@ -296,12 +322,28 @@ void MainWindow::appendLog(const QString &line) {
 }
 
 void MainWindow::setUiEnabled(bool enabled) {
-    for (QPushButton *b : {m_createBtn, m_downloadBtn, m_editorBtn, m_settingsBtn}) b->setEnabled(enabled);
+    if (m_runExeBtn) m_runExeBtn->setEnabled(enabled);
+    if (m_explorerBtn) m_explorerBtn->setEnabled(enabled);
+    for (QPushButton *b : {m_createBtn, m_downloadBtn, m_editorBtn, m_nongBtn, m_settingsBtn}) b->setEnabled(enabled);
     onSelectionChanged();
     if (!enabled) { m_launchBtn->setEnabled(false); m_editBtn->setEnabled(false); m_deleteBtn->setEnabled(false); }
 }
 
 QString MainWindow::selectedInstanceName() const { return m_selectedInstance; }
+
+void MainWindow::runLinuxTool(bool explorer) {
+    QString executable = "explorer.exe";
+    if (!explorer) {
+        executable = QFileDialog::getOpenFileName(this, "Launch executable", QString(), "Windows executables (*.exe);;All files (*)");
+        if (executable.isEmpty()) return;
+    }
+    bool geode = false;
+    for (const auto &instance : m_instances) {
+        if (instance.name == m_selectedInstance) geode = instance.data.value("isGeodeCompatible").toBool();
+    }
+    setUiEnabled(false);
+    m_launcher->runExecutable(executable, geode);
+}
 
 void MainWindow::refreshInstances() {
     m_instances = InstanceManager::getInstances();
@@ -420,6 +462,7 @@ void MainWindow::onDelete() {
 }
 
 void MainWindow::onSettings() {
+    m_settings = Settings::load();
     GD_DEBUG_LOG("ui", "Settings button clicked; opening Settings dialog");
     SettingsDialog dlg(this, m_settings, m_appVersion);
     connect(&dlg, &SettingsDialog::checkUpdatesRequested, this, [this]() {
@@ -455,4 +498,10 @@ void MainWindow::onEditor() {
     SaveEditorDialog dlg(this);
     dlg.exec();
     GD_DEBUG_LOG("ui", "Save Editor dialog closed");
+}
+
+void MainWindow::onNong() {
+    NongDialog dialog(this, m_nongManager);
+    dialog.exec();
+    m_settings = Settings::load();
 }

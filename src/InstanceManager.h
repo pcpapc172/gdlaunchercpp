@@ -35,14 +35,14 @@ public:
     static void ensureInstanceIntegrity(const QString &instancePath, bool isGeode, bool useMegahack);
 
     using FileProgressCb = std::function<void(const QString &file, int current)>;
-    static void transferManagedItems(const QString &src, const QString &dest,
+    static bool transferManagedItems(const QString &src, const QString &dest,
                                       const QStringList &managedItems, bool move,
                                       const FileProgressCb &onFileProgress = nullptr);
 
     static QString moveToTrash(const QString &sourcePath, const QString &prefix);
 
 private:
-    static void copyDirWithProgress(const QString &src, const QString &dest, const QString &instanceRoot,
+    static bool copyDirWithProgress(const QString &src, const QString &dest, const QString &instanceRoot,
                                      int &counter, const FileProgressCb &onFileProgress);
     static void copyDir(const QString &src, const QString &dest);
     // Builds the full instance.json contents from an InstanceDialog-shaped QJsonObject. Shared

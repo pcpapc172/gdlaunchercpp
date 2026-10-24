@@ -15,7 +15,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y qt6-base-dev zlib1g-dev build-essential cmake ninja-build
+          sudo apt-get install -y qt6-base-dev libqt6svg6 zlib1g-dev build-essential cmake ninja-build
 
       # Not a tagged release, so the version is "<number>-<short-sha>" -- traceable back to the
       # exact commit without looking like a real numbered release.
@@ -23,10 +23,13 @@ jobs:
         run: echo "APP_VERSION=$(cat VERSION)-$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
 
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGDLAUNCHER_APP_VERSION="$APP_VERSION"
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGDLAUNCHER_APP_VERSION="$APP_VERSION" -DGDLAUNCHER_BUILD_TESTS=ON
 
       - name: Build
         run: cmake --build build -j"$(nproc)"
+
+      - name: Regression checks
+        run: ctest --test-dir build --output-on-failure
 
       - name: Strip binary
         run: strip build/gdlauncher
@@ -74,8 +77,15 @@ jobs:
         run: cmake --build build --config Release -j
 
       - name: Deploy Qt runtime
-        run: windeployqt --release build\Release\gdlauncher.exe
-        shell: cmd
+        run: |
+          windeployqt --release build\Release\gdlauncher.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # The SVG icon engine is loaded at runtime, so explicitly bundle it.
+          $qtRoot = Split-Path (Split-Path (Get-Command windeployqt).Source -Parent) -Parent
+          New-Item -ItemType Directory -Force build\Release\iconengines | Out-Null
+          Copy-Item "$qtRoot\plugins\iconengines\qsvgicon.dll" build\Release\iconengines\ -ErrorAction Stop
+          Copy-Item "$qtRoot\bin\Qt6Svg.dll" build\Release\ -ErrorAction Stop
+        shell: pwsh
 
       - name: Copy zlib runtime
         run: |
@@ -136,8 +146,15 @@ jobs:
         run: cmake --build build --config Release -j
 
       - name: Deploy Qt runtime
-        run: windeployqt --release build\Release\gdlauncher.exe
-        shell: cmd
+        run: |
+          windeployqt --release build\Release\gdlauncher.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # The SVG icon engine is loaded at runtime, so explicitly bundle it.
+          $qtRoot = Split-Path (Split-Path (Get-Command windeployqt).Source -Parent) -Parent
+          New-Item -ItemType Directory -Force build\Release\iconengines | Out-Null
+          Copy-Item "$qtRoot\plugins\iconengines\qsvgicon.dll" build\Release\iconengines\ -ErrorAction Stop
+          Copy-Item "$qtRoot\bin\Qt6Svg.dll" build\Release\ -ErrorAction Stop
+        shell: pwsh
 
       - name: Copy zlib runtime
         run: |
