@@ -176,6 +176,7 @@ QWidget *NongDialog::buildCard(const NongSong &song) {
     const QString key = NongManager::operationKey(directory, song.songId);
     auto *card = new QFrame(this);
     card->setObjectName("card");
+    card->setProperty("recordId", song.recordId);
     auto *layout = new QVBoxLayout(card);
     auto *title = new QLabel(song.description.isEmpty() ? song.name : song.description, card);
     title->setTextFormat(Qt::PlainText);
@@ -192,15 +193,17 @@ QWidget *NongDialog::buildCard(const NongSong &song) {
     layout->addWidget(detail);
     auto *bar = new QProgressBar(card);
     bar->setObjectName("songProgress");
-    const bool active = m_manager->isDownloading(key);
+    const bool busy = m_manager->isDownloading(key);
+    const bool active = busy && m_manager->operation(key).recordId == song.recordId;
     bar->setVisible(active);
     layout->addWidget(bar);
     auto *actions = new QHBoxLayout;
-    auto *download = new QPushButton(active ? "Downloading..." : NongManager::hasSong(directory, song.songId) ? "Replace" : "Download", card);
+    auto *download = new QPushButton(active ? "Downloading..." : busy ? "Same ID downloading..." : NongManager::hasSong(directory, song.songId) ? "Replace" : "Download", card);
     download->setObjectName("primary");
-    download->setEnabled(!active);
+    download->setEnabled(!busy);
+    if (busy && !active) download->setToolTip("Another song is downloading to this same song ID. Wait for it to finish before replacing it.");
     auto *restore = new QPushButton("Restore original", card);
-    restore->setEnabled(!active && NongManager::hasOriginal(directory, song.songId));
+    restore->setEnabled(!busy && NongManager::hasOriginal(directory, song.songId));
     auto *cancel = new QPushButton("Cancel", card);
     cancel->setVisible(active);
     actions->addWidget(download);
@@ -228,7 +231,9 @@ QWidget *NongDialog::buildCard(const NongSong &song) {
     return card;
 }
 void NongDialog::updateProgress(const QString &key, qint64 received, qint64 total) {
+    const QString recordId = m_manager->operation(key).recordId;
     for (auto *card : m_cards.value(key)) {
+        if (card->property("recordId").toString() != recordId) continue;
         auto *bar = card->findChild<QProgressBar *>("songProgress");
         bar->setVisible(true);
         bar->setRange(0, total > 0 ? 100 : 0);

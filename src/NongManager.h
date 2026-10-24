@@ -15,6 +15,7 @@ struct NongOperation {
     qint64 received = 0;
     qint64 total = -1;
     QNetworkReply *reply = nullptr;
+    QString recordId;
 };
 
 // Owned by MainWindow: catalogue and downloads survive closing the dialog.

@@ -198,7 +198,7 @@ void NongManager::downloadSong(const NongSong &song, const QString &directory) {
     QNetworkRequest request(song.url);
     request.setTransferTimeout(60000);
     auto *reply = m_net.get(request);
-    m_operations.insert(key, NongOperation{0, -1, reply});
+    m_operations.insert(key, NongOperation{0, -1, reply, song.recordId});
     emit downloadStarted(key);
     auto writeFailed = std::make_shared<bool>(false);
     auto consume = [reply, file, writeFailed]() {

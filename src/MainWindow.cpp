@@ -256,14 +256,8 @@ void MainWindow::runStartupChecks() {
         Settings::save(m_settings);
 
         const QStringList entries = {
-            "Game tracking now follows the launched process and its children, ignoring unrelated games with the same executable name.",
-            "Updates automatically detect how this copy of GDLauncher was installed; the manual installation-type setting has been removed.",
-            "Added Linux actions to launch a Windows executable or open Windows Explorer using the selected Wine or GE-Proton/UMU backend.",
-            "Save copying and sync-back now run without freezing the interface, with live filenames, file counts, and progress in the main window.",
-            "Added a Source code button in Settings with a GitHub SVG icon that stays readable in light and dark themes.",
-            "Added a SongFileHub NONG Downloader with search, download progress, custom folders, replacement backups, and Restore original.",
-            "Download menus now show fetch, parsing, size lookup, and download errors with a way to retry.",
-            "Removed window fades and animated progress transitions."
+            "Fixed NONG download progress and Cancel appearing on different songs that share the same song ID. Only the selected SongFileHub entry now shows an active download.",
+            "Other songs targeting the same ID stay disabled until the download finishes, preventing file conflicts."
         };
         ChangelogDialog dlg(this, m_appVersion, entries);
         dlg.exec();

@@ -11,6 +11,7 @@
 #include <QLabel>
 #include <QProcess>
 #include <QPushButton>
+#include <QProgressBar>
 #include <QTemporaryDir>
 #include <QThread>
 #include <QTimer>
@@ -58,7 +59,22 @@ bool download(NongManager &manager, const NongSong &song, const QString &directo
         });
     manager.downloadSong(song, directory);
     if (reopenDialog) {
-        { NongDialog dialog(nullptr, &manager); }
+        for (int reopening = 0; reopening < 2; ++reopening) {
+            NongDialog dialog(nullptr, &manager);
+            manager.downloadProgress(key, 45, 100);
+            int visibleBars = 0, downloadingButtons = 0, blockedAlternatives = 0, cancelButtons = 0;
+            for (auto *bar : dialog.findChildren<QProgressBar *>("songProgress")) {
+                if (!bar->isHidden()) { ++visibleBars; check(bar->value() == 45, "selected song receives progress"); }
+                else check(bar->value() != 45, "other titles sharing the song ID receive no progress");
+            }
+            for (auto *button : dialog.findChildren<QPushButton *>()) {
+                if (button->text() == "Downloading...") ++downloadingButtons;
+                if (button->text() == "Same ID downloading...") { ++blockedAlternatives; check(!button->isEnabled(), "same-ID alternatives stay locked"); }
+                if (button->text() == "Cancel" && !button->isHidden()) ++cancelButtons;
+            }
+            check(visibleBars == 1 && downloadingButtons == 1 && blockedAlternatives == 1 && cancelButtons == 1,
+                  "only the selected SFH record shows progress and Cancel after reopening");
+        }
         check(manager.isDownloading(key), "closing NONG dialog keeps downloads alive");
     }
     if (cancel) manager.cancelDownload(key);
@@ -83,6 +99,8 @@ void nongChecks(const QString &root) {
                     {"filetype", "mp3"}, {"downloads", 30}, {"levelID", QJsonArray{"42"}}},
         QJsonObject{{"_id", "record-b"}, {"songID", "456"}, {"name", "Other Level"}, {"songName", "Other Song"},
                     {"filetype", "ogg"}, {"downloads", 10}},
+        QJsonObject{{"_id", "record-remix"}, {"songID", "123"}, {"name", "Another Level"}, {"songName", "Different Remix"},
+                    {"filetype", "mp3"}, {"downloads", 20}},
         QJsonObject{{"_id", "record-c"}, {"songID", "../escape"}, {"filetype", "mp3"}}
     };
     const QString catalog = root + "/songs.json";
@@ -92,7 +110,7 @@ void nongChecks(const QString &root) {
     QObject::connect(&manager, &NongManager::catalogReady, &manager, [&]() { ready = true; });
     manager.fetchCatalog();
     check(waitUntil([&]() { return ready; }), "parse SongFileHub catalogue asynchronously");
-    check(manager.songs().size() == 2 && manager.songs().first().songId == "123", "catalogue filters unsafe IDs and sorts songs");
+    check(manager.songs().size() == 3 && manager.songs().first().songId == "123", "catalogue filters unsafe IDs and sorts songs");
     check(manager.songs().first().url.toString() == "https://api.songfilehub.com/song/record-a?download=true&name=123", "use SFH song download API");
     auto song = manager.songs().first();
     const QString mp3 = root + "/fixture.mp3";
@@ -140,7 +158,7 @@ void nongChecks(const QString &root) {
         put(catalog, "{broken json");
         manager.fetchCatalog();
         check(waitUntil([&]() { return status->text().contains("Could not load SongFileHub"); }), "NONG fetch failure is visible");
-        check(manager.songs().size() == 2, "failed NONG refresh keeps prior catalogue");
+        check(manager.songs().size() == 3, "failed NONG refresh keeps prior catalogue");
         check(dialog.findChild<QPushButton *>("nongRetry")->isEnabled(), "NONG error offers Retry");
     }
     const QString versions = root + "/versions.json";
