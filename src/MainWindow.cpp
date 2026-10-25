@@ -96,7 +96,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     m_editorBtn = new QPushButton(style->standardIcon(QStyle::SP_FileDialogContentsView), "Save Editor", this);
     m_nongBtn = new QPushButton(style->standardIcon(QStyle::SP_MediaVolume), "NONG Downloader", this);
     m_settingsBtn = new QPushButton(style->standardIcon(QStyle::SP_ComputerIcon), "Settings", this);
-    for (QPushButton *b : {m_launchBtn, m_createBtn, m_editBtn, m_deleteBtn, m_downloadBtn, m_editorBtn, m_nongBtn, m_settingsBtn})
+    for (QPushButton *b : {m_launchBtn, m_createBtn, m_editBtn, m_deleteBtn, m_downloadBtn, m_editorBtn, m_nongBtn})
         btnCol->addWidget(b);
 #ifdef Q_OS_LINUX
     m_runExeBtn = new QPushButton(style->standardIcon(QStyle::SP_MediaPlay), "Launch executable", this);
@@ -109,6 +109,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     connect(m_explorerBtn, &QPushButton::clicked, this, [this]() { runLinuxTool(true); });
 #endif
     btnCol->addStretch();
+    btnCol->addWidget(m_settingsBtn);
     mainRow->addLayout(btnCol);
 
     root->addLayout(mainRow, 1);
@@ -230,9 +231,8 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     // for kDebugLoggingEnabled builds, so turning that setting on anywhere else did nothing
     // visible: appendLog() had nowhere to put the lines.
     m_consoleWindow = new ConsoleWindow(nullptr);
-    if constexpr (kDebugLoggingEnabled) {
-        // A debug build's whole point is visibility, so open it immediately rather than
-        // waiting for a launch.
+    m_consoleWindow->initLines(m_logBuffer);
+    if (kDebugLoggingEnabled || m_settings.enableLogOutput) {
         m_consoleWindow->show();
         GD_DEBUG_LOG("startup", "Live log console opened.");
     }
@@ -256,7 +256,9 @@ void MainWindow::runStartupChecks() {
         Settings::save(m_settings);
 
         const QStringList entries = {
-            "Fixed GE-Proton game launches getting stuck while Explorer or background Wine services were still running in the same prefix."
+            "Wine and GE-Proton launches now use the system's permitted file-descriptor limit instead of inheriting a restrictive desktop limit, preventing descriptor exhaustion during startup.",
+            "Settings is now the last button, pinned to the bottom of the sidebar.",
+            "When log output is enabled, the log console opens with GDLauncher instead of waiting for a game launch."
         };
         ChangelogDialog dlg(this, m_appVersion, entries);
         dlg.exec();
@@ -472,6 +474,7 @@ void MainWindow::onSettings() {
         m_settings = dlg.resultSettings();
         Settings::save(m_settings);
         Theme::apply(Theme::fromSettingsString(m_settings.theme));
+        if (m_settings.enableLogOutput && m_consoleWindow) m_consoleWindow->show();
         GD_DEBUG_LOG("ui", QString("Settings saved: theme=%1 close_behavior=%2 sync_delay=%3 log_output=%4")
             .arg(m_settings.theme, m_settings.closeBehavior).arg(m_settings.syncDelay)
             .arg(m_settings.enableLogOutput ? "on" : "off"));

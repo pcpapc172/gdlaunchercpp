@@ -11,12 +11,32 @@
 #include <QProcess>
 #include <QSysInfo>
 #include <QStandardPaths>
+#ifdef Q_OS_LINUX
+#include <sys/resource.h>
+#endif
 
 ProtonManager::ProtonManager(QObject *parent) : QObject(parent) {}
 
 QString ProtonManager::protonDir() { return Settings::baseDir() + "/Runtimes/GE-Proton"; }
 QString ProtonManager::launcherPath() { return Settings::baseDir() + "/Runtimes/umu/umu-run"; }
 QString ProtonManager::prefixDir() { return Settings::baseDir() + "/ProtonPrefix"; }
+
+void ProtonManager::configureProcess(QProcess *process) {
+#ifdef Q_OS_LINUX
+    // Desktop launchers commonly inherit a 1024-descriptor soft limit. Wine's
+    // synchronization handles can exhaust it; use the already-permitted hard
+    // limit in the child, without changing the user's session or Wine settings.
+    process->setChildProcessModifier([]() {
+        struct rlimit limit;
+        if (getrlimit(RLIMIT_NOFILE, &limit) == 0 && limit.rlim_cur < limit.rlim_max) {
+            limit.rlim_cur = limit.rlim_max;
+            setrlimit(RLIMIT_NOFILE, &limit);
+        }
+    });
+#else
+    Q_UNUSED(process);
+#endif
+}
 
 QProcessEnvironment ProtonManager::environment() {
     auto env = QProcessEnvironment::systemEnvironment();
@@ -187,6 +207,7 @@ void ProtonManager::initializePrefix() {
     emit statusUpdate("Preparing GE-Proton and its runtime for first launch...");
     emit progress(-1);
     auto *process = new QProcess(this);
+    configureProcess(process);
     process->setProcessEnvironment(environment());
     connect(process, &QProcess::readyReadStandardOutput, this, [process]() { process->readAllStandardOutput(); });
     connect(process, &QProcess::errorOccurred, this, [this, process](QProcess::ProcessError error) {

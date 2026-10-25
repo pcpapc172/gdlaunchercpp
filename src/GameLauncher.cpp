@@ -88,6 +88,7 @@ void GameLauncher::startTool() {
     auto env = proton ? ProtonManager::environment() : QProcessEnvironment::systemEnvironment();
     if (m_toolGeode) env.insert("WINEDLLOVERRIDES", "xinput1_4=n,b");
     auto *process = new QProcess(this);
+    ProtonManager::configureProcess(process);
     m_toolProcess = process;
     process->setProcessEnvironment(env);
     if (QFileInfo(executable).isAbsolute()) process->setWorkingDirectory(QFileInfo(executable).absolutePath());
@@ -472,6 +473,7 @@ void GameLauncher::startPrepared(LaunchContext ctx, bool useProton) {
 
     m_processTracker.reset();
     m_gameProcess = new QProcess(this);
+    ProtonManager::configureProcess(m_gameProcess);
     m_processTracker.configureProcess(m_gameProcess);
     m_gameProcess->setWorkingDirectory(ctx.versionPath);
     if (kIsLinux) {

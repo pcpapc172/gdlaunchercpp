@@ -25,6 +25,7 @@
 #include "VersionManager.h"
 #include "ui/DownloadsDialog.h"
 #include <QLineEdit>
+#include <sys/resource.h>
 #include "GameLauncher.h"
 #include "InstanceManager.h"
 #include "Settings.h"
@@ -203,6 +204,22 @@ void start(QProcess &process, const QString &path, const QStringList &args, cons
     check(process.waitForStarted(), "start fixture process");
 }
 void checks(const QString &self) {
+    struct rlimit originalLimit;
+    check(getrlimit(RLIMIT_NOFILE, &originalLimit) == 0, "read descriptor limits");
+    struct rlimit desktopLimit = originalLimit;
+    desktopLimit.rlim_cur = qMin<rlim_t>(1024, desktopLimit.rlim_max);
+    check(setrlimit(RLIMIT_NOFILE, &desktopLimit) == 0, "simulate desktop descriptor limit");
+    QProcess runtimeCheck;
+    ProtonManager::configureProcess(&runtimeCheck);
+    runtimeCheck.start("/bin/sh", {"-c", "ulimit -n"});
+    const bool completedLimitCheck = runtimeCheck.waitForFinished();
+    struct rlimit parentLimit;
+    getrlimit(RLIMIT_NOFILE, &parentLimit);
+    setrlimit(RLIMIT_NOFILE, &originalLimit);
+    check(completedLimitCheck && runtimeCheck.exitCode() == 0 &&
+          runtimeCheck.readAllStandardOutput().trimmed().toULongLong() == originalLimit.rlim_max,
+          "runtime child inherits the permitted hard descriptor limit");
+    check(parentLimit.rlim_cur == desktopLimit.rlim_cur, "runtime setup leaves parent descriptor limit unchanged");
     QTemporaryDir temporary;
     check(temporary.isValid(), "create isolated test home");
     qputenv("HOME", temporary.path().toUtf8());

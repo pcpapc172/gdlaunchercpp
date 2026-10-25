@@ -65,7 +65,7 @@ SettingsDialog::SettingsDialog(QWidget *parent, const AppSettings &current, cons
     help->setObjectName("subtext");
     help->setStyleSheet("font-size:12px;");
     advancedLayout->addWidget(help);
-    m_logOutputCheck = new QCheckBox("Enable Log Output (shows a live terminal when launching)", this);
+    m_logOutputCheck = new QCheckBox("Enable Log Output (opens the log console with GDLauncher)", this);
     advancedLayout->addWidget(m_logOutputCheck);
 #ifdef Q_OS_LINUX
     m_protonGECheck = new QCheckBox("Download GE-Proton and launch with UMULauncher", this);

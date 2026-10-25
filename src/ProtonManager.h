@@ -4,6 +4,7 @@
 #include <QProcessEnvironment>
 #include <QTemporaryDir>
 #include <memory>
+class QProcess;
 
 // Downloads the official GE-Proton and portable UMU releases once, then reuses them.
 class ProtonManager : public QObject {
@@ -15,6 +16,7 @@ public:
     static QString launcherPath();
     static QString prefixDir();
     static QProcessEnvironment environment();
+    static void configureProcess(QProcess *process);
 
 signals:
     void statusUpdate(const QString &message);
