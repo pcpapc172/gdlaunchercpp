@@ -256,8 +256,7 @@ void MainWindow::runStartupChecks() {
         Settings::save(m_settings);
 
         const QStringList entries = {
-            "Fixed NONG download progress and Cancel appearing on different songs that share the same song ID. Only the selected SongFileHub entry now shows an active download.",
-            "Other songs targeting the same ID stay disabled until the download finishes, preventing file conflicts."
+            "Fixed GE-Proton game launches getting stuck while Explorer or background Wine services were still running in the same prefix."
         };
         ChangelogDialog dlg(this, m_appVersion, entries);
         dlg.exec();

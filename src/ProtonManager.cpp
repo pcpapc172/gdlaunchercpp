@@ -23,7 +23,9 @@ QProcessEnvironment ProtonManager::environment() {
     env.insert("PROTONPATH", protonDir());
     env.insert("WINEPREFIX", prefixDir());
     env.insert("GAMEID", "0");
-    env.insert("PROTON_VERB", "waitforexitandrun");
+    // Explorer and background Wine services can outlive their window. Waiting
+    // for the entire shared prefix to stop would block subsequent game launches.
+    env.insert("PROTON_VERB", "run");
     return env;
 }
 

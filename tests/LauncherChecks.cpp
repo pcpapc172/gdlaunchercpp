@@ -342,6 +342,7 @@ root = pathlib.Path(os.environ['HOME'])
     const auto toolEnv = QJsonDocument::fromJson(get(temporary.path() + "/umu-environment")).object();
     check(toolEnv.value("WINEPREFIX").toString() == ProtonManager::prefixDir(), "UMU tool uses dedicated prefix");
     check(toolEnv.value("PROTONPATH").toString() == ProtonManager::protonDir(), "UMU tool uses installed GE-Proton");
+    check(toolEnv.value("PROTON_VERB").toString() == "run", "UMU launches do not wait for existing prefix services or Explorer");
     check(toolEnv.value("WINEDLLOVERRIDES").toString() == "xinput1_4=n,b", "UMU tool keeps Geode override");
     nongChecks(temporary.path());
     unrelated.kill(); unrelated.waitForFinished();
