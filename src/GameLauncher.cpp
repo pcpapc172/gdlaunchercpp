@@ -70,7 +70,10 @@ GameLauncher::GameLauncher(QWidget *dialogParent, QObject *parent)
     }
 }
 
-GameLauncher::~GameLauncher() { m_transferFuture.waitForFinished(); }
+GameLauncher::~GameLauncher() {
+    m_backupFuture.waitForFinished();
+    m_transferFuture.waitForFinished();
+}
 
 void GameLauncher::runExecutable(const QString &executable, bool geodeCompatible) {
     if (!kIsLinux || m_launching || m_gameRunning || m_syncing) return;
@@ -336,10 +339,7 @@ void GameLauncher::launchInstance(const QString &instanceName) {
         return;
     }
 
-    // Set for the whole prep/copy phase below, so a close attempt mid-launch is rejected the
-    // same way as one during an active run or sync -- most of this happens synchronously on
-    // the UI thread anyway (so a close can't land here today), but the flag makes that
-    // guarantee explicit rather than incidental, and holds if any of this becomes async later.
+    // Held across recovery, daily backup, file copying, and runtime preparation.
     m_launching = true;
 
     const bool useProton = kIsLinux && Settings::load().useProtonGE;
@@ -450,11 +450,46 @@ void GameLauncher::launchInstance(const QString &instanceName) {
 
     ctx.managedItems = InstanceManager::getManagedItems(data.value("isGeodeCompatible").toBool(),
                                                           data.value("useMegaHack").toBool());
-    GD_DEBUG_LOG("transfer", QString("Copying instance -> game save folder (%1): %2")
-        .arg(ctx.localAppDataPath, ctx.managedItems.join(", ")));
-    transferAsync(instancePath, ctx.localAppDataPath, ctx.managedItems, false,
-                  "Preparing " + instanceName, [this, ctx, useProton]() { startPrepared(ctx, useProton); });
+    backupBeforeLaunch(ctx, useProton);
 }
+
+void GameLauncher::backupBeforeLaunch(LaunchContext ctx, bool useProton) {
+    m_backingUp = true;
+    emit statusUpdate("Checking daily backup for " + ctx.instanceName + "...");
+    emit launchProgress(-1);
+    auto *watcher = new QFutureWatcher<BackupResult>(this);
+    connect(watcher, &QFutureWatcher<BackupResult>::finished, this, [this, watcher, ctx, useProton]() {
+        const auto result = watcher->result();
+        watcher->deleteLater();
+        m_backingUp = false;
+        if (!result.success) {
+            m_launching = false;
+            emit launchComplete();
+            emit statusUpdate("Daily backup failed: " + result.error);
+            QMessageBox::critical(m_dialogParent, "Daily Backup Failed",
+                result.error + "\n\nThe instance was not launched. Fix the backup problem and retry.");
+            return;
+        }
+        if (result.created) appendLog("[backup] Created daily backup: " + result.path);
+        if (!result.warning.isEmpty()) appendLog("[backup] " + result.warning);
+        const QString instancePath = Settings::instancesDir() + "/" + ctx.instanceName;
+        transferAsync(instancePath, ctx.localAppDataPath, ctx.managedItems, false,
+                      "Preparing " + ctx.instanceName, [this, ctx, useProton]() { startPrepared(ctx, useProton); });
+    });
+    m_backupFuture = QtConcurrent::run([this, name = ctx.instanceName]() {
+        QElapsedTimer throttle;
+        throttle.start();
+        return BackupManager::createScheduled(name, QDate::currentDate(),
+            [this, name, &throttle](const QString &file, int current, int total) {
+                if (current != 1 && current != total && throttle.elapsed() < 33) return;
+                throttle.restart();
+                emit statusUpdate(QString("Backing up %1 (%2) — %3 / %4 files").arg(name, file).arg(current).arg(total));
+                emit launchProgress(total ? static_cast<int>(qint64(current) * 100 / total) : 100);
+            });
+    });
+    watcher->setFuture(m_backupFuture);
+}
+
 
 void GameLauncher::startPrepared(LaunchContext ctx, bool useProton) {
     const QString instanceName = ctx.instanceName;
@@ -620,7 +655,7 @@ void GameLauncher::finishCleanup(LaunchContext ctx) {
     GD_DEBUG_LOG("launch", QString("Launch/sync cycle finished for '%1'").arg(ctx.instanceName));
     if (ctx.launchError.isEmpty() && settings.closeBehavior == "Close After Game Ends") {
         GD_DEBUG_LOG("launch", "close_behavior=Close After Game Ends; quitting.");
-        qApp->quit();
+        emit closeRequested();
     } else {
         emit launchComplete();
         emit statusUpdate(ctx.launchError.isEmpty() ? "Ready" : ctx.launchError);

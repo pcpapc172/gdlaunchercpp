@@ -60,6 +60,7 @@ set(APP_SOURCES
     src/GameLauncher.cpp
     src/ProtonManager.cpp
     src/ProcessTracker.cpp
+    src/BackupManager.cpp
     src/NongManager.cpp
     src/ConsoleWindow.cpp
     src/UpdateChecker.cpp
@@ -69,6 +70,8 @@ set(APP_SOURCES
     src/gd/SaveEditor.cpp
     src/ui/InstanceDialog.cpp
     src/ui/SettingsDialog.cpp
+    src/ui/CloseGuard.cpp
+    src/ui/BackupsDialog.cpp
     src/ui/DownloadsDialog.cpp
     src/ui/NongDialog.cpp
     src/ui/SaveEditorDialog.cpp
@@ -88,6 +91,7 @@ set(APP_HEADERS
     src/GameLauncher.h
     src/ProtonManager.h
     src/ProcessTracker.h
+    src/BackupManager.h
     src/NongManager.h
     src/ConsoleWindow.h
     src/UpdateChecker.h
@@ -97,6 +101,8 @@ set(APP_HEADERS
     src/gd/SaveEditor.h
     src/ui/InstanceDialog.h
     src/ui/SettingsDialog.h
+    src/ui/CloseGuard.h
+    src/ui/BackupsDialog.h
     src/ui/DownloadsDialog.h
     src/ui/NongDialog.h
     src/ui/SaveEditorDialog.h
@@ -220,6 +226,9 @@ if(GDLAUNCHER_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         tests/LauncherChecks.cpp
         src/GameLauncher.cpp src/GameLauncher.h
         src/ProcessTracker.cpp src/ProcessTracker.h
+        src/BackupManager.cpp src/BackupManager.h
+        src/ui/CloseGuard.cpp src/ui/CloseGuard.h
+        src/ui/BackupsDialog.cpp src/ui/BackupsDialog.h
         src/NongManager.cpp src/NongManager.h
         src/ui/NongDialog.cpp src/ui/NongDialog.h
         src/VersionManager.cpp src/VersionManager.h

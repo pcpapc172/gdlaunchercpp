@@ -66,10 +66,12 @@ private:
     AppSettings m_settings;
     QString m_appVersion;
     QStringList m_logBuffer;
+    bool m_closePromptOpen = false;
 
     void setUiEnabled(bool enabled);
     void appendLog(const QString &line);
     QString selectedInstanceName() const;
     void runStartupChecks();
     void runLinuxTool(bool explorer);
+    QString closeBlockReason() const;
 };

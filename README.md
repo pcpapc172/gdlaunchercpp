@@ -52,6 +52,25 @@ On Debian/Ubuntu: `apt install qt6-base-dev libqt6svg6 zlib1g-dev build-essentia
 
 ## Launching and updates
 
+By default, GDLauncher blocks closing while a game, tool, backup, download, or
+file transfer is active. **Force close...** requires a second confirmation and
+immediately exits without a final sync. Close protection, the force-close option,
+and the second confirmation can be configured in Settings.
+
+Each instance gets a backup before its first launch of the local calendar day,
+saved as `Backups/<instance-name>-<timestamp>` in the launcher data folder.
+Settings offers daily, every-launch, weekly, and custom-day schedules, a custom
+backup directory, entire-instance or managed-save snapshots, and retention limits.
+The defaults are daily full-instance backups with no automatic deletion. A failed
+backup blocks that launch and does not count toward the day's schedule.
+
+The **Backups...** button in Settings opens a searchable, sortable list with
+multi-selection for deletion, **Restore**, **Fork to new instance**, and **Open
+folder**. Restore requires two warnings and always creates a full safety backup
+of the current instance, even when automatic backups are disabled. Full-instance
+restore replaces the instance; managed-save restore preserves unrelated files.
+Fork creates a separate instance without overwriting an existing one.
+
 The launcher tracks its own game process family, so another running copy with
 the same executable name does not prevent save sync. Save copying and sync-back
 run in a worker thread, with the current filename, file count, and percentage

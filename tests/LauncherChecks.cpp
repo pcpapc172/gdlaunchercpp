@@ -24,6 +24,12 @@
 #include "ui/NongDialog.h"
 #include "VersionManager.h"
 #include "ui/DownloadsDialog.h"
+#include "BackupManager.h"
+#include "ui/CloseGuard.h"
+#include "ui/BackupsDialog.h"
+#include <QTableWidget>
+#include <QSpinBox>
+#include <QMessageBox>
 #include <QLineEdit>
 #include <sys/resource.h>
 #include "GameLauncher.h"
@@ -204,6 +210,37 @@ void start(QProcess &process, const QString &path, const QStringList &args, cons
     check(process.waitForStarted(), "start fixture process");
 }
 void checks(const QString &self) {
+    auto checkCloseConfirmation = [](bool force, bool confirmForce, bool allowForce = true, bool confirmTwice = true) {
+        int firstDialogs = 0, secondDialogs = 0;
+        QSet<QString> handled;
+        QTimer responder;
+        QObject::connect(&responder, &QTimer::timeout, &responder, [&]() {
+            auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+            if (!box || handled.contains(box->windowTitle())) return;
+            handled.insert(box->windowTitle());
+            if (box->windowTitle() == "Cannot Close GDLauncher") {
+                ++firstDialogs;
+                check(box->defaultButton()->objectName() == "closeGuardStay", "closing stays blocked by default");
+                if (!allowForce) check(!box->findChild<QPushButton *>("closeGuardForce"), "force close can be disabled");
+                box->findChild<QPushButton *>(force ? "closeGuardForce" : "closeGuardStay")->click();
+            } else if (box->windowTitle() == "Confirm Force Close") {
+                ++secondDialogs;
+                check(box->defaultButton()->objectName() == "closeGuardCancel", "force-close confirmation defaults to staying open");
+                box->findChild<QPushButton *>(confirmForce ? "closeGuardConfirm" : "closeGuardCancel")->click();
+            }
+        });
+        responder.start(5);
+        const bool allowed = CloseGuard::confirmForceClose(nullptr, "A game or file operation is still active.", allowForce, confirmTwice);
+        responder.stop();
+        check(allowed == (force && allowForce && (!confirmTwice || confirmForce)) &&
+              firstDialogs == 1 && secondDialogs == (force && allowForce && confirmTwice ? 1 : 0),
+              "force close requires two explicit confirmations");
+    };
+    checkCloseConfirmation(false, false);
+    checkCloseConfirmation(true, false);
+    checkCloseConfirmation(true, true);
+    checkCloseConfirmation(false, false, false);
+    checkCloseConfirmation(true, false, true, false);
     struct rlimit originalLimit;
     check(getrlimit(RLIMIT_NOFILE, &originalLimit) == 0, "read descriptor limits");
     struct rlimit desktopLimit = originalLimit;
@@ -286,7 +323,8 @@ void checks(const QString &self) {
         dialog.show();
         QApplication::processEvents();
         dialog.grab().save(QCoreApplication::applicationDirPath() + "/settings-" + theme + ".png");
-        check(dialog.findChildren<QComboBox *>().isEmpty(), "installation no longer manually selectable");
+        for (auto *combo : dialog.findChildren<QComboBox *>())
+            check(combo->findData("portable") < 0, "installation no longer manually selectable");
     }
 
     const QString source = temporary.path() + "/source";
@@ -309,6 +347,8 @@ void checks(const QString &self) {
                          {"saveFolderName", "GeometryDash"}, {"isGeodeCompatible", true}, {"useMegaHack", false}};
     check(InstanceManager::createInstance(instance).success, "create test instance");
     const QString instancePath = Settings::instancesDir() + "/test";
+    put(instancePath + "/CCGameManager.dat", "before game");
+    put(instancePath + "/.hidden-save", "hidden instance data");
     const QByteArray payload(64 * 1024, 'x');
     for (int i = 0; i < 700; ++i) put(instancePath + QString("/geode/mods/file-%1").arg(i), payload);
     const QString livePath = temporary.path() + "/.wine/drive_c/users/" + QFileInfo(temporary.path()).fileName() + "/AppData/Local/GeometryDash";
@@ -330,6 +370,127 @@ void checks(const QString &self) {
     check(waitUntil([&]() { return completed; }, 15000), "own game exits and syncs despite unrelated process");
     check(started && prepProgress > 0 && syncProgress > 0 && ticks > 10, "UI remains responsive with live copying status");
     check(get(instancePath + "/CCGameManager.dat") == "from launched game", "sync back actual game progress");
+    const auto firstBackup = BackupManager::createScheduled("test");
+    check(firstBackup.success && !firstBackup.created, "launch already created today's persistent backup");
+    check(QFileInfo(firstBackup.path).fileName().startsWith("test-"), "backup folder is instance name and timestamp");
+    check(get(firstBackup.path + "/CCGameManager.dat") == "before game", "backup precedes game launch");
+    check(get(firstBackup.path + "/.hidden-save") == "hidden instance data" &&
+          QFileInfo::exists(firstBackup.path + "/instance.json"), "snapshot includes hidden files and instance metadata");
+    put(instancePath + "/CCGameManager.dat", "later today");
+    const auto sameDay = BackupManager::createScheduled("test");
+    check(sameDay.success && !sameDay.created && sameDay.path == firstBackup.path &&
+          get(sameDay.path + "/CCGameManager.dat") == "before game", "same-day launch never replaces the first backup");
+    const auto nextDay = BackupManager::createScheduled("test", QDate::currentDate().addDays(1));
+    check(nextDay.success && nextDay.created && nextDay.path != firstBackup.path &&
+          get(nextDay.path + "/CCGameManager.dat") == "later today", "next local day gets a fresh backup");
+    QJsonObject other = instance; other["name"] = "another";
+    check(InstanceManager::createInstance(other).success, "create another backup instance");
+    const QString rootBackups = Settings::backupsDir();
+    check(QDir().rename(rootBackups, rootBackups + "-kept"), "temporarily make backup path unavailable");
+    put(rootBackups, "not a directory");
+    const auto failedBackup = BackupManager::createScheduled("another");
+    check(!failedBackup.success && !failedBackup.error.isEmpty(), "backup failure is reported");
+    QFile::remove(rootBackups);
+    check(QDir().rename(rootBackups + "-kept", rootBackups), "restore backup location");
+    const auto retriedBackup = BackupManager::createScheduled("another");
+    check(retriedBackup.success && retriedBackup.created, "failed attempt does not mark the instance backed up today");
+    check(!BackupManager::createScheduled("test").created, "instances have separate daily backup schedules");
+    auto backupSettings = Settings::load();
+    check(backupSettings.backupsEnabled && backupSettings.backupIntervalDays == 1 &&
+          backupSettings.backupKeepCount == 0 && backupSettings.closeGuardEnabled &&
+          backupSettings.allowForceClose && backupSettings.confirmForceCloseTwice, "safe backup and close defaults");
+    const QString anotherPath = Settings::instancesDir() + "/another";
+    put(anotherPath + "/CCGameManager.dat", "current save before restore");
+    put(anotherPath + "/extra.txt", "untracked current file");
+    backupSettings.backupsEnabled = false;
+    Settings::save(backupSettings);
+    const auto disabled = BackupManager::createScheduled("another");
+    check(disabled.success && !disabled.created && disabled.path.isEmpty(), "automatic backups can be disabled");
+    const auto restored = BackupManager::restore(retriedBackup.path);
+    check(restored.success && get(restored.path + "/CCGameManager.dat") == "current save before restore" &&
+          get(restored.path + "/extra.txt") == "untracked current file", "restore always backs up the entire current instance even when automatic backups are disabled");
+    check(get(anotherPath + "/CCGameManager.dat").isEmpty() && !QFileInfo::exists(anotherPath + "/extra.txt"), "full restore replaces the current snapshot");
+    check(!QFileInfo::exists(anotherPath + "/.gdlauncher-backup.json"), "restoring does not copy backup bookkeeping into the instance");
+    const auto forked = BackupManager::fork(retriedBackup.path, "forked");
+    check(forked.success && get(forked.path + "/CCGameManager.dat").isEmpty(), "fork creates an independent instance with the backed-up saves");
+    check(QJsonDocument::fromJson(get(forked.path + "/instance.json")).object().value("name").toString() == "forked", "fork updates instance identity");
+    check(!BackupManager::fork(retriedBackup.path, "forked").success, "fork never overwrites an existing instance");
+    QString backupError;
+    check(!BackupManager::remove(anotherPath, &backupError) && QFileInfo::exists(anotherPath), "backup deletion rejects instance folders");
+    check(BackupManager::remove(restored.path, &backupError) && !QFileInfo::exists(restored.path), "delete removes only the selected backup");
+    backupSettings.backupsEnabled = true;
+    backupSettings.backupScope = "managed";
+    backupSettings.backupIntervalDays = 7;
+    Settings::save(backupSettings);
+    put(anotherPath + "/CCGameManager.dat", "managed snapshot");
+    put(anotherPath + "/extra.txt", "untracked first");
+    const auto managed = BackupManager::createScheduled("another");
+    check(managed.success && managed.created && !QFileInfo::exists(managed.path + "/extra.txt"), "managed-only backup excludes untracked content");
+    check(!BackupManager::createScheduled("another", QDate::currentDate().addDays(6)).created &&
+           BackupManager::createScheduled("another", QDate::currentDate().addDays(7)).created, "custom backup intervals are honored");
+    put(anotherPath + "/CCGameManager.dat", "managed later");
+    put(anotherPath + "/extra.txt", "keep this current untracked file");
+    const auto managedRestore = BackupManager::restore(managed.path);
+    check(managedRestore.success && get(anotherPath + "/CCGameManager.dat") == "managed snapshot" &&
+          get(anotherPath + "/extra.txt") == "keep this current untracked file", "managed restore preserves untracked current content");
+    backupSettings.backupIntervalDays = 0;
+    backupSettings.backupKeepCount = 2;
+    Settings::save(backupSettings);
+    const auto everyLaunch = BackupManager::createScheduled("another");
+    const auto everyLaunchAgain = BackupManager::createScheduled("another");
+    check(everyLaunch.created && everyLaunchAgain.created && everyLaunch.path != everyLaunchAgain.path, "every-launch mode creates unique snapshots");
+    int retained = 0;
+    for (const auto &backup : BackupManager::list()) if (backup.instanceName == "another") ++retained;
+    check(retained == 2, "retention keeps the configured number of completed backups per instance");
+    backupSettings.backupDirectory = temporary.path() + "/custom-backups";
+    backupSettings.backupKeepCount = 0;
+    Settings::save(backupSettings);
+    const auto custom = BackupManager::createScheduled("another");
+    check(custom.success && custom.path.startsWith(backupSettings.backupDirectory + "/"), "custom backup location is used");
+    {
+        BackupsDialog dialog;
+        auto *table = dialog.findChild<QTableWidget *>("backupTable");
+        auto *search = dialog.findChild<QLineEdit *>("backupSearch");
+        check(table && table->rowCount() == 1, "backup browser lists configured folder");
+        search->setText("no matches here");
+        check(table->rowCount() == 0, "backup search filters rows");
+        search->clear();
+        table->selectRow(0);
+        check(dialog.findChild<QPushButton *>("backupRestore")->isEnabled() &&
+              dialog.findChild<QPushButton *>("backupFork")->isEnabled(), "backup selection enables restore and fork");
+        put(anotherPath + "/CCGameManager.dat", "do not replace after cancelled restore");
+        QSet<QString> handled;
+        int warnings = 0;
+        QTimer cancelRestore;
+        QObject::connect(&cancelRestore, &QTimer::timeout, &dialog, [&]() {
+            auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+            if (!box || handled.contains(box->windowTitle())) return;
+            handled.insert(box->windowTitle());
+            ++warnings;
+            box->button(box->windowTitle() == "Restore Backup" ? QMessageBox::Ok : QMessageBox::Cancel)->click();
+        });
+        cancelRestore.start(5);
+        dialog.findChild<QPushButton *>("backupRestore")->click();
+        cancelRestore.stop();
+        check(warnings == 2 && get(anotherPath + "/CCGameManager.dat") == "do not replace after cancelled restore", "restore has two warnings and cancellation preserves current saves");
+        dialog.show();
+        QApplication::processEvents();
+        dialog.grab().save(QCoreApplication::applicationDirPath() + "/backups.png");
+    }
+    {
+        SettingsDialog dialog(nullptr, backupSettings, "test");
+        dialog.findChild<QCheckBox *>("closeGuardEnabled")->setChecked(false);
+        dialog.findChild<QCheckBox *>("backupsEnabled")->setChecked(false);
+        dialog.findChild<QComboBox *>("backupFrequency")->setCurrentIndex(3);
+        dialog.findChild<QSpinBox *>("backupIntervalDays")->setValue(3);
+        for (auto *button : dialog.findChildren<QPushButton *>()) if (button->text() == "Save and Close") button->click();
+        const auto selected = dialog.resultSettings();
+        check(!selected.closeGuardEnabled && !selected.backupsEnabled && selected.backupIntervalDays == 3, "backup and close settings are editable");
+        const auto persisted = AppSettings::fromJson(selected.toJson());
+        check(persisted.backupDirectory == backupSettings.backupDirectory && persisted.backupIntervalDays == 3 &&
+              !persisted.closeGuardEnabled && !persisted.backupsEnabled, "all backup and close options persist");
+    }
+    Settings::save(AppSettings{});
     check(unrelated.state() != QProcess::NotRunning, "unrelated process remains alive after sync");
     check(!QFileInfo::exists(Settings::baseDir() + "/info.json"), "recovery marker cleared after sync");
 

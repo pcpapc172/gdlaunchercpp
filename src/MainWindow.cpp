@@ -12,6 +12,9 @@
 #include "ui/SaveEditorDialog.h"
 #include "ui/WelcomeDialog.h"
 #include "ui/ChangelogDialog.h"
+#include "ui/CloseGuard.h"
+#include <QScopedValueRollback>
+#include <cstdlib>
 #include "ui/Theme.h"
 #include "ui/Animations.h"
 #include "DebugLog.h"
@@ -182,6 +185,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     connect(m_settingsBtn, &QPushButton::clicked, this, &MainWindow::onSettings);
 
     connect(m_launcher, &GameLauncher::statusUpdate, this, [this](const QString &msg) { m_statusLabel->setText(msg); });
+    connect(m_launcher, &GameLauncher::closeRequested, this, [this]() { close(); });
     connect(m_launcher, &GameLauncher::launchProgress, this, [this](int percentage) {
         m_progressBar->setRange(0, percentage < 0 ? 0 : 100);
         if (percentage >= 0) m_progressBar->setAnimatedValue(percentage);
@@ -256,48 +260,44 @@ void MainWindow::runStartupChecks() {
         Settings::save(m_settings);
 
         const QStringList entries = {
-            "Wine and GE-Proton launches now use the system's permitted file-descriptor limit instead of inheriting a restrictive desktop limit, preventing descriptor exhaustion during startup.",
-            "Settings is now the last button, pinned to the bottom of the sidebar.",
-            "When log output is enabled, the log console opens with GDLauncher instead of waiting for a game launch."
+            "Closing is blocked while an instance, backup, or file operation is active. Force close requires a second confirmation by default.",
+            "Instances are backed up before their first launch each day. Settings controls backup frequency, folder, contents, retention, and close protection.",
+            "The new Backups window supports searching, selecting, restoring, forking, and deleting snapshots.",
+            "Restore requires two warnings and always saves a full safety backup of the current instance before replacing it."
         };
         ChangelogDialog dlg(this, m_appVersion, entries);
         dlg.exec();
     }
 }
 
+QString MainWindow::closeBlockReason() const {
+    if (BackupManager::isBusy()) return "A backup is being copied, restored, or deleted.";
+    if (m_launcher) {
+        if (m_launcher->isBackingUp()) return "An instance backup is being created.";
+        if (m_launcher->isSyncing()) return "Save files are being copied or moved back into the instance.";
+        if (m_launcher->isToolRunning()) return "A Windows executable or Explorer session is still running.";
+        if (m_launcher->isLaunching()) return "GDLauncher is preparing an instance or copying files.";
+        if (m_launcher->isGameRunning()) return "A game instance is still open or being checked for a restart.";
+    }
+    if (m_versionManager && m_versionManager->hasActiveOperations()) return "Version files are being downloaded or extracted.";
+    if (m_nongManager && m_nongManager->hasActiveDownloads()) return "Song files are being downloaded.";
+    return {};
+}
+
 void MainWindow::closeEvent(QCloseEvent *event) {
-    if (m_launcher && m_launcher->isToolRunning()) {
-        QMessageBox::information(this, "Windows Tool Running", "Close the Windows executable or Explorer window before closing GDLauncher.");
+    if (m_closePromptOpen) { event->ignore(); return; }
+    const QString reason = closeBlockReason();
+    const auto settings = Settings::load();
+    if (settings.closeGuardEnabled && !reason.isEmpty()) {
         event->ignore();
-        return;
-    }
-    // The instance->save-folder sync-back only happens once GameLauncher detects the game
-    // process has exited -- closing the app while it's still running skips that entirely, so
-    // whatever the player just did in-game never makes it back into the instance's save data.
-    // Nothing was stopping that before: the window just closed, GameLauncher (and its
-    // still-running QProcess/monitor timer) got destroyed along with it, and any in-progress
-    // sync got cut off mid-copy.
-    if (m_launcher && (m_launcher->isLaunching() || m_launcher->isSyncing())) {
-        QMessageBox::warning(this, m_launcher->isLaunching() ? "Launch in Progress" : "Sync in Progress",
-            m_launcher->isLaunching()
-                ? "GDLauncher is currently preparing to launch the game. Please wait for it to "
-                  "finish before closing the launcher."
-                : "GDLauncher is currently syncing save data back from the game. Please wait for "
-                  "it to finish before closing the launcher.");
-        event->ignore();
-        return;
-    }
-    if (m_launcher && m_launcher->isGameRunning()) {
-        const int response = QMessageBox::warning(this, "Game Still Running",
-            "Geometry Dash is still running for the selected instance. Closing GDLauncher now "
-            "will prevent your save data from being synced back when the game exits.\n\n"
-            "Quit anyway?",
-            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-        if (response != QMessageBox::Yes) {
-            event->ignore();
-            return;
+        QScopedValueRollback<bool> prompting(m_closePromptOpen, true);
+        if (!CloseGuard::confirmForceClose(this, reason, settings.allowForceClose, settings.confirmForceCloseTwice)) return;
+        if (!closeBlockReason().isEmpty()) {
+            // Explicit force-close must not wait in a worker's destructor or
+            // silently run a final sync. Keep recovery markers for next launch.
+            std::_Exit(EXIT_SUCCESS);
         }
-        GD_DEBUG_LOG("ui", "Main window closing while game is still running (user confirmed).");
+        event->accept();
     }
 
     // ConsoleWindow is a separate top-level widget with no parent (so it can be shown/hidden
@@ -469,6 +469,7 @@ void MainWindow::onSettings() {
         QDesktopServices::openUrl(QUrl::fromLocalFile(Settings::baseDir()));
     });
     const int result = dlg.exec();
+    refreshInstances();
     GD_DEBUG_LOG("ui", QString("Settings dialog closed (%1)").arg(result == QDialog::Accepted ? "Save and Close" : "dismissed"));
     if (result == QDialog::Accepted) {
         m_settings = dlg.resultSettings();

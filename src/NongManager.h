@@ -27,6 +27,7 @@ public:
     const QVector<NongSong> &songs() const { return m_songs; }
     void fetchCatalog();
     bool isFetching() const { return m_fetching; }
+    bool hasActiveDownloads() const { return !m_operations.isEmpty(); }
     static QVector<NongSong> parseCatalog(const QByteArray &json, QString *error = nullptr);
     static QString defaultDirectory();
     static QString resolveDirectory(const QString &input);

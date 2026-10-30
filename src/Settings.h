@@ -11,6 +11,14 @@ struct AppSettings {
     bool enableLogOutput = false;
     bool useProtonGE = false;
     QString nongDownloadFolder = "%LOCALAPPDATA%/GeometryDash";
+    bool closeGuardEnabled = true;
+    bool allowForceClose = true;
+    bool confirmForceCloseTwice = true;
+    bool backupsEnabled = true;
+    int backupIntervalDays = 1; // 0 = every launch, 1 = daily
+    int backupKeepCount = 0; // 0 = keep all completed backups
+    QString backupDirectory; // empty = launcher data/Backups
+    QString backupScope = "instance"; // "instance" or "managed"
 
     QJsonObject toJson() const;
     static AppSettings fromJson(const QJsonObject &obj);

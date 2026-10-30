@@ -49,6 +49,14 @@ QJsonObject AppSettings::toJson() const {
     o["enable_log_output"] = enableLogOutput;
     o["use_proton_ge"] = useProtonGE;
     o["nong_download_folder"] = nongDownloadFolder;
+    o["close_guard_enabled"] = closeGuardEnabled;
+    o["allow_force_close"] = allowForceClose;
+    o["confirm_force_close_twice"] = confirmForceCloseTwice;
+    o["backups_enabled"] = backupsEnabled;
+    o["backup_interval_days"] = backupIntervalDays;
+    o["backup_keep_count"] = backupKeepCount;
+    o["backup_directory"] = backupDirectory;
+    o["backup_scope"] = backupScope;
     return o;
 }
 
@@ -61,6 +69,14 @@ AppSettings AppSettings::fromJson(const QJsonObject &obj) {
     if (obj.contains("enable_log_output")) s.enableLogOutput = obj["enable_log_output"].toBool(s.enableLogOutput);
     s.useProtonGE = obj.value("use_proton_ge").toBool(false);
     s.nongDownloadFolder = obj.value("nong_download_folder").toString(s.nongDownloadFolder);
+    s.closeGuardEnabled = obj.value("close_guard_enabled").toBool(true);
+    s.allowForceClose = obj.value("allow_force_close").toBool(true);
+    s.confirmForceCloseTwice = obj.value("confirm_force_close_twice").toBool(true);
+    s.backupsEnabled = obj.value("backups_enabled").toBool(true);
+    s.backupIntervalDays = qBound(0, obj.value("backup_interval_days").toInt(1), 3650);
+    s.backupKeepCount = qBound(0, obj.value("backup_keep_count").toInt(0), 10000);
+    s.backupDirectory = obj.value("backup_directory").toString();
+    s.backupScope = obj.value("backup_scope").toString("instance") == "managed" ? "managed" : "instance";
     return s;
 }
 
@@ -84,7 +100,10 @@ QString Settings::baseDir() {
 QString Settings::instancesDir() { return baseDir() + "/Instances"; }
 QString Settings::trashDir() { return baseDir() + "/Trash"; }
 QString Settings::versionsDir() { return baseDir() + "/Versions"; }
-QString Settings::backupsDir() { return baseDir() + "/Backups"; }
+QString Settings::backupsDir() {
+    const auto custom = load().backupDirectory;
+    return custom.isEmpty() ? baseDir() + "/Backups" : custom;
+}
 QString Settings::settingsFile() { return baseDir() + "/launcher_settings.json"; }
 
 QString Settings::gameSaveDir(const QString &saveFolderName, bool useProton) {

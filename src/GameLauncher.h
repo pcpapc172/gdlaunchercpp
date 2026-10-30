@@ -9,6 +9,7 @@
 #include "ProcessTracker.h"
 #include <functional>
 #include <QFuture>
+#include "BackupManager.h"
 
 class ProtonManager;
 
@@ -23,6 +24,7 @@ public:
     bool isGameRunning() const { return m_gameRunning; }
     bool isSyncing() const { return m_syncing; }
     bool isLaunching() const { return m_launching; }
+    bool isBackingUp() const { return m_backingUp; }
     bool isToolRunning() const { return m_toolProcess != nullptr; }
 
     // Kicks off the (mostly synchronous, some async via timers) launch sequence.
@@ -42,12 +44,14 @@ signals:
     void logLine(const QString &line);
     void logStatusChanged(bool running);
     void launchProgress(int percentage);
+    void closeRequested();
 
 private:
     QWidget *m_dialogParent;
     bool m_gameRunning = false;
     bool m_syncing = false;
     bool m_launching = false;
+    bool m_backingUp = false;
     QProcess *m_gameProcess = nullptr;
     QProcess *m_toolProcess = nullptr;
     QTimer *m_monitorTimer = nullptr;
@@ -59,6 +63,7 @@ private:
     bool m_toolGeode = false;
     ProcessTracker m_processTracker;
     QFuture<bool> m_transferFuture;
+    QFuture<BackupResult> m_backupFuture;
 
     struct LaunchContext {
         QString instanceName;
@@ -97,6 +102,7 @@ private:
 
     void beginMonitor(LaunchContext ctx);
     void startPrepared(LaunchContext ctx, bool useProton);
+    void backupBeforeLaunch(LaunchContext ctx, bool useProton);
     void finishCleanup(LaunchContext ctx);
     void transferAsync(const QString &src, const QString &dest, const QStringList &items,
                        bool move, const QString &label, const std::function<void()> &done);

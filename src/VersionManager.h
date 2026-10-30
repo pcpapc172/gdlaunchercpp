@@ -58,6 +58,7 @@ public:
     // Async: emits remoteVersionsReady(json array) with isInstalled/size populated where possible
     void fetchRemoteVersions();
     bool isFetching() const { return m_fetching; }
+    bool hasActiveOperations() const { return !m_operations.isEmpty(); }
 
     // Async: downloads + extracts a version described by a JSON object {id, path, url, name}.
     // Keeps running even if nothing is listening to the progress signals.

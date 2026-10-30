@@ -206,6 +206,10 @@ void UpdateChecker::check(bool isManual) {
                 emit progressComplete();
                 emit statusUpdate("Launching installer...");
                 GD_DEBUG_LOG("update", QString("Downloaded %1; launching it and closing.").arg(downloadPath));
+                if (m_dialogParent && !m_dialogParent->window()->close()) {
+                    emit statusUpdate("Update downloaded. Installation postponed because GDLauncher stayed open.");
+                    return;
+                }
 
                 if (packageType == "msi") {
                     QProcess::startDetached("msiexec", {"/i", QDir::toNativeSeparators(downloadPath)});

@@ -6,6 +6,7 @@ class QRadioButton;
 class QSpinBox;
 class QCheckBox;
 class QComboBox;
+class QLineEdit;
 
 // Port of the Settings modal from index.html/renderer.js.
 class SettingsDialog : public QDialog {
@@ -28,4 +29,13 @@ private:
     QSpinBox *m_syncDelaySpin;
     QCheckBox *m_logOutputCheck;
     QCheckBox *m_protonGECheck = nullptr;
+    QCheckBox *m_closeGuardCheck;
+    QCheckBox *m_allowForceCheck;
+    QCheckBox *m_doubleConfirmCheck;
+    QCheckBox *m_backupsCheck;
+    QComboBox *m_backupFrequency;
+    QComboBox *m_backupScope;
+    QSpinBox *m_backupDays;
+    QSpinBox *m_backupKeep;
+    QLineEdit *m_backupFolder;
 };
