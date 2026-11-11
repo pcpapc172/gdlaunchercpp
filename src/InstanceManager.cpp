@@ -132,6 +132,7 @@ QJsonObject InstanceManager::buildInstanceJson(const QJsonObject &data, const QS
     instanceData["useMegaHack"] = data.contains("useMegaHack") ? data.value("useMegaHack") : QJsonValue(true);
     instanceData["useSteamEmu"] = data.value("useSteamEmu").toBool(false);
     instanceData["arguments"] = data.value("arguments").toString();
+    instanceData["protonVersion"] = data.value("protonVersion").toString("default");
     instanceData["skipRestartCheck"] = data.value("skipRestartCheck").toBool(false);
     instanceData["enableGeodeLogging"] = data.value("enableGeodeLogging").toBool(false);
     instanceData["geodeLogModVersion"] = data.value("geodeLogModVersion").toString("");

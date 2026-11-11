@@ -29,6 +29,7 @@ private:
     QSpinBox *m_syncDelaySpin;
     QCheckBox *m_logOutputCheck;
     QCheckBox *m_protonGECheck = nullptr;
+    QComboBox *m_protonVersion = nullptr;
     QCheckBox *m_closeGuardCheck;
     QCheckBox *m_allowForceCheck;
     QCheckBox *m_doubleConfirmCheck;

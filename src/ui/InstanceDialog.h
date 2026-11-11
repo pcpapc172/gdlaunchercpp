@@ -41,6 +41,7 @@ private:
     QLineEdit *m_exePathEdit;
     QLineEdit *m_saveFolderEdit;
     QLineEdit *m_argumentsEdit;
+    QComboBox *m_protonVersion = nullptr;
     QCheckBox *m_geodeCheck;
     QCheckBox *m_megahackCheck;
     QCheckBox *m_steamEmuCheck;

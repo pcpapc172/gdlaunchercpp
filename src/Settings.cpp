@@ -48,6 +48,7 @@ QJsonObject AppSettings::toJson() const {
     o["last_run_version"] = lastRunVersion.isEmpty() ? QJsonValue() : QJsonValue(lastRunVersion);
     o["enable_log_output"] = enableLogOutput;
     o["use_proton_ge"] = useProtonGE;
+    o["proton_version"] = protonVersion;
     o["nong_download_folder"] = nongDownloadFolder;
     o["close_guard_enabled"] = closeGuardEnabled;
     o["allow_force_close"] = allowForceClose;
@@ -68,6 +69,7 @@ AppSettings AppSettings::fromJson(const QJsonObject &obj) {
     if (obj.contains("last_run_version")) s.lastRunVersion = obj["last_run_version"].toString();
     if (obj.contains("enable_log_output")) s.enableLogOutput = obj["enable_log_output"].toBool(s.enableLogOutput);
     s.useProtonGE = obj.value("use_proton_ge").toBool(false);
+    s.protonVersion = obj.value("proton_version").toString("auto");
     s.nongDownloadFolder = obj.value("nong_download_folder").toString(s.nongDownloadFolder);
     s.closeGuardEnabled = obj.value("close_guard_enabled").toBool(true);
     s.allowForceClose = obj.value("allow_force_close").toBool(true);

@@ -11,11 +11,13 @@ class ProtonManager : public QObject {
     Q_OBJECT
 public:
     explicit ProtonManager(QObject *parent = nullptr);
-    void ensureReady();
-    static QString protonDir();
+    void ensureReady(const QString &version = QString());
+    static QString protonDir(const QString &version = QString());
+    static bool validVersion(const QString &version);
+    static QString selectVersion(const QString &directory, const QString &choice);
     static QString launcherPath();
     static QString prefixDir();
-    static QProcessEnvironment environment();
+    static QProcessEnvironment environment(const QString &version = QString());
     static void configureProcess(QProcess *process);
 
 signals:
@@ -27,6 +29,7 @@ private:
     QNetworkAccessManager m_net;
     std::unique_ptr<QTemporaryDir> m_staging;
     bool m_busy = false;
+    QString m_version;
     void ensureComponent(bool proton);
     void download(const QString &url, bool proton);
     void extract(bool proton);

@@ -60,6 +60,8 @@ private:
     QStringList m_logBuffer;
     ProtonManager *m_protonManager = nullptr;
     bool m_protonReady = false;
+    QString m_readyProtonVersion;
+    QString m_pendingProtonVersion;
     QString m_pendingInstance;
     QString m_pendingTool;
     ProcessTracker m_processTracker;
@@ -84,6 +86,7 @@ private:
         // (SmartSteamEmu is expected to launch it, not stay resident under its own name).
         QString gameProcessName;
         QString launchError;
+        QString protonVersion;
     };
 
     QString linuxAppDataPath(const QString &saveFolderName, bool useProton = false) const;

@@ -65,6 +65,7 @@ GameLauncher::GameLauncher(QWidget *dialogParent, QObject *parent)
                 return;
             }
             m_protonReady = true;
+            m_readyProtonVersion = m_pendingProtonVersion;
             if (!m_pendingTool.isEmpty()) { m_launching = true; startTool(); }
             else launchInstance(m_pendingInstance);
         });
@@ -80,15 +81,24 @@ void GameLauncher::runExecutable(const QString &executable) {
     if (!kIsLinux || m_launching || m_gameRunning || m_syncing) return;
     m_launching = true;
     m_pendingTool = executable;
-    if (Settings::load().useProtonGE && !m_protonReady) m_protonManager->ensureReady();
-    else startTool();
+    const auto settings = Settings::load();
+    if (settings.useProtonGE) {
+        const QString directory = QFileInfo(executable).isAbsolute() ? QFileInfo(executable).absolutePath() : QString();
+        m_pendingProtonVersion = settings.protonVersion == "auto" && directory.isEmpty() && m_protonReady
+            ? m_readyProtonVersion : ProtonManager::selectVersion(directory, settings.protonVersion);
+        if (!m_protonReady || m_readyProtonVersion != m_pendingProtonVersion) {
+            m_protonManager->ensureReady(m_pendingProtonVersion);
+            return;
+        }
+    }
+    startTool();
 }
 
 void GameLauncher::startTool() {
     const QString executable = m_pendingTool;
     m_pendingTool.clear();
     const bool proton = Settings::load().useProtonGE;
-    auto env = proton ? ProtonManager::environment() : QProcessEnvironment::systemEnvironment();
+    auto env = proton ? ProtonManager::environment(m_readyProtonVersion) : QProcessEnvironment::systemEnvironment();
     if (QFileInfo(executable).isAbsolute())
         env.insert("WINEDLLOVERRIDES", localDllOverrides(QFileInfo(executable).absolutePath(), env.value("WINEDLLOVERRIDES")));
     auto *process = new QProcess(this);
@@ -345,11 +355,6 @@ void GameLauncher::launchInstance(const QString &instanceName) {
 
     const bool useProton = kIsLinux && Settings::load().useProtonGE;
     m_pendingTool.clear();
-    if (useProton && !m_protonReady) {
-        m_pendingInstance = instanceName;
-        m_protonManager->ensureReady();
-        return;
-    }
 
     emit statusUpdate(QString("Preparing to launch %1...").arg(instanceName));
 
@@ -426,6 +431,18 @@ void GameLauncher::launchInstance(const QString &instanceName) {
             ? QString("Steam emulator executable not found: %1").arg(QFileInfo(ctx.exePath).fileName())
             : "Game executable not found");
         return;
+    }
+
+    if (useProton) {
+        const QString choice = data.value("protonVersion").toString("default");
+        const QString selected = choice == "default" ? Settings::load().protonVersion : choice;
+        ctx.protonVersion = ProtonManager::selectVersion(ctx.versionPath, selected);
+        if (!m_protonReady || m_readyProtonVersion != ctx.protonVersion) {
+            m_pendingInstance = instanceName;
+            m_pendingProtonVersion = ctx.protonVersion;
+            m_protonManager->ensureReady(m_pendingProtonVersion);
+            return;
+        }
     }
 
     ctx.localAppDataPath = linuxAppDataPath(data.value("saveFolderName").toString(), useProton);
@@ -522,9 +539,10 @@ void GameLauncher::startPrepared(LaunchContext ctx, bool useProton) {
         appendLog("[log] Reading live Geode logs from " + ctx.versionPath + "/geode/logs");
     }
     if (kIsLinux) {
-        QProcessEnvironment env = useProton ? ProtonManager::environment() : QProcessEnvironment::systemEnvironment();
+        QProcessEnvironment env = useProton ? ProtonManager::environment(ctx.protonVersion) : QProcessEnvironment::systemEnvironment();
         env.insert("WINEDLLOVERRIDES", localDllOverrides(ctx.versionPath, env.value("WINEDLLOVERRIDES")));
         env.insert("GDLAUNCHER_SESSION", m_processTracker.token());
+        if (useProton) appendLog("[launch] GE-Proton runtime: " + env.value("PROTONPATH"));
         m_gameProcess->setProcessEnvironment(env);
         if (useProton) m_gameProcess->start("python3", QStringList{ProtonManager::launcherPath(), ctx.exePath} + arguments);
         else m_gameProcess->start("wine", QStringList{ctx.exePath} + arguments);

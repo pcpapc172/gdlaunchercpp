@@ -37,6 +37,7 @@
 #include "Settings.h"
 #include "ui/SettingsDialog.h"
 #include "ui/Theme.h"
+#include "ui/ProtonVersionCombo.h"
 
 namespace {
 void check(bool value, const char *message) { if (!value) throw std::runtime_error(message); }
@@ -238,6 +239,22 @@ void checks(const QString &self) {
     }
     {
         QTemporaryDir dlls;
+        check(ProtonManager::selectVersion(dlls.path(), "auto").isEmpty(), "ordinary games keep latest runtime");
+        put(dlls.path() + "/HACKPRO.DLL", "fixture");
+        put(dlls.path() + "/hackproldr.dll", "fixture");
+        check(ProtonManager::selectVersion(dlls.path(), "auto") == "GE-Proton9-27", "standalone MegaHack automatically uses compatible Proton");
+        check(ProtonManager::selectVersion(dlls.path(), "latest").isEmpty(), "explicit latest overrides legacy detection");
+        check(ProtonManager::selectVersion(dlls.path(), "GE-Proton10-1") == "GE-Proton10-1", "explicit release overrides legacy detection");
+        check(!ProtonManager::validVersion("../invalid") && !ProtonManager::validVersion("GE-Proton9-27/evil") &&
+              ProtonManager::validVersion("GE-Proton9-27"), "runtime tags cannot escape runtime directory");
+        const auto env = ProtonManager::environment("GE-Proton9-27");
+        check(env.value("PROTONPATH") == ProtonManager::protonDir("GE-Proton9-27") &&
+              env.value("WINEPREFIX") == ProtonManager::prefixDir(), "selected release preserves launcher save prefix");
+        auto *combo = makeProtonVersionCombo(nullptr, "default", true);
+        check(protonVersionChoice(combo) == "default", "instance inherits Settings by default");
+        combo->setEditText("GE-Proton10-1");
+        check(protonVersionChoice(combo) == "GE-Proton10-1", "custom release tag is read from editable combo");
+        delete combo;
         put(dlls.path() + "/XInput9_1_0.dll", "fixture");
         put(dlls.path() + "/CustomPlugin.DLL", "fixture");
         put(dlls.path() + "/ignore.exe", "fixture");
@@ -382,10 +399,13 @@ void checks(const QString &self) {
     QJsonObject instance{{"name", "test"}, {"versionType", "local"}, {"version", "test/game"},
                          {"saveFolderName", "GeometryDash"}, {"isGeodeCompatible", true}, {"useMegaHack", false}};
     instance["arguments"] = "--example \"value with spaces\"";
+    instance["protonVersion"] = "GE-Proton9-27";
     check(InstanceManager::createInstance(instance).success, "create test instance");
     const QString instancePath = Settings::instancesDir() + "/test";
     check(QJsonDocument::fromJson(get(instancePath + "/instance.json")).object().value("arguments").toString() ==
           instance.value("arguments").toString(), "instance launch arguments persist");
+    check(QJsonDocument::fromJson(get(instancePath + "/instance.json")).object().value("protonVersion").toString() ==
+          "GE-Proton9-27", "instance runtime override persists independently of Settings");
     put(instancePath + "/CCGameManager.dat", "before game");
     put(instancePath + "/.hidden-save", "hidden instance data");
     const QByteArray payload(64 * 1024, 'x');
@@ -563,6 +583,17 @@ root = pathlib.Path(os.environ['HOME'])
     check(toolEnv.value("PROTONPATH").toString() == ProtonManager::protonDir(), "UMU tool uses installed GE-Proton");
     check(toolEnv.value("PROTON_VERB").toString() == "run", "UMU launches do not wait for existing prefix services or Explorer");
     check(!toolEnv.value("WINEDLLOVERRIDES").toString().contains("xinput1_4=n,b"), "Explorer has no hard-coded game DLL override");
+    settings.protonVersion = "GE-Proton9-27";
+    Settings::save(settings);
+    check(Settings::load().protonVersion == "GE-Proton9-27", "default runtime setting persists");
+    put(ProtonManager::protonDir(settings.protonVersion) + "/proton", "fixture");
+    completed = false;
+    launcher.runExecutable("explorer.exe");
+    check(waitUntil([&]() { return completed; }), "runtime can change without restarting launcher");
+    const auto pinnedEnv = QJsonDocument::fromJson(get(temporary.path() + "/umu-environment")).object();
+    check(pinnedEnv.value("PROTONPATH").toString() == ProtonManager::protonDir(settings.protonVersion),
+          "tools honor changed default runtime rather than cached readiness");
+
     nongChecks(temporary.path());
     unrelated.kill(); unrelated.waitForFinished();
     qputenv("PATH", originalPath.toUtf8());

@@ -10,6 +10,7 @@ struct AppSettings {
     QString lastRunVersion;
     bool enableLogOutput = false;
     bool useProtonGE = false;
+    QString protonVersion = "auto";
     QString nongDownloadFolder = "%LOCALAPPDATA%/GeometryDash";
     bool closeGuardEnabled = true;
     bool allowForceClose = true;

@@ -1,4 +1,5 @@
 #include "InstanceDialog.h"
+#include "ProtonVersionCombo.h"
 #include "../VersionManager.h"
 #include "Theme.h"
 #include "Animations.h"
@@ -83,6 +84,10 @@ InstanceDialog::InstanceDialog(QWidget *parent, bool editMode, const QJsonObject
     m_argumentsEdit->setPlaceholderText("Optional arguments, e.g. --flag \"value with spaces\"");
     m_argumentsEdit->setToolTip("Arguments passed to the selected executable (or Steam emulator). Quote values containing spaces. These are not shell commands or environment variables.");
     form->addRow("Launch Arguments:", m_argumentsEdit);
+#ifdef Q_OS_LINUX
+    m_protonVersion = makeProtonVersionCombo(this, existingData.value("protonVersion").toString("default"), true);
+    form->addRow("GE-Proton Version:", m_protonVersion);
+#endif
 
     root->addLayout(form);
 
@@ -288,6 +293,13 @@ void InstanceDialog::onSave() {
     QJsonObject data;
     data["name"] = name;
     data["arguments"] = m_argumentsEdit->text();
+    const QString protonChoice = m_protonVersion ? protonVersionChoice(m_protonVersion)
+        : m_existing.value("protonVersion").toString("default");
+    if (protonChoice != "default" && !ProtonManager::validVersion(protonChoice)) {
+        QMessageBox::warning(this, "Invalid GE-Proton Version", "Select an option or enter an official release tag such as GE-Proton9-27.");
+        return;
+    }
+    data["protonVersion"] = protonChoice;
     const bool isLocal = m_localRadio->isChecked();
     data["versionType"] = isLocal ? "local" : "custom";
     data["saveFolderName"] = m_saveFolderEdit->text().trimmed();

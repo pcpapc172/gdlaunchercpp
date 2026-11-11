@@ -263,10 +263,9 @@ void MainWindow::runStartupChecks() {
         Settings::save(m_settings);
 
         const QStringList entries = {
-            "Added per-instance Launch Arguments, preserving quoted values on Windows, Wine, and GE-Proton.",
-            "Wine and GE-Proton now prefer local DLLs found in the executable folder, supporting legacy Geode loaders without a hard-coded XInput override.",
-            "The Linux log console now reads live Geode log files, including new logs after game restarts.",
-            "Started the Windows named-pipe log server so the advanced logging mod can connect."
+            "Fixed invisible standalone MegaHack menus on Linux by automatically selecting compatible GE-Proton 9.",
+            "Added a default GE-Proton version in Settings and per-instance overrides, including custom official release tags.",
+            "Selected GE-Proton releases download with the main progress bar and are cached separately."
         };
         ChangelogDialog dlg(this, m_appVersion, entries);
         dlg.exec();

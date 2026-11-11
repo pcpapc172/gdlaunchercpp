@@ -1,4 +1,5 @@
 #include "SettingsDialog.h"
+#include "ProtonVersionCombo.h"
 #include "Theme.h"
 #include "Animations.h"
 #include <QVBoxLayout>
@@ -88,6 +89,9 @@ SettingsDialog::SettingsDialog(QWidget *parent, const AppSettings &current, cons
     m_protonGECheck = new QCheckBox("Download GE-Proton and launch with UMULauncher", this);
     m_protonGECheck->setChecked(current.useProtonGE);
     advancedLayout->addWidget(m_protonGECheck);
+    advancedLayout->addWidget(new QLabel("Default GE-Proton Version:", this));
+    m_protonVersion = makeProtonVersionCombo(this, current.protonVersion);
+    advancedLayout->addWidget(m_protonVersion);
     auto *protonHelp = new QLabel("Downloads GE-Proton automatically on first launch. May improve performance and compatibility.", this);
     protonHelp->setObjectName("subtext");
     protonHelp->setWordWrap(true);
@@ -245,6 +249,12 @@ SettingsDialog::SettingsDialog(QWidget *parent, const AppSettings &current, cons
             QMessageBox::warning(this, "Invalid Backup Folder", "Choose an absolute backup folder, or leave the field empty for the default.");
             return;
         }
+        const QString protonChoice = m_protonVersion ? protonVersionChoice(m_protonVersion) : current.protonVersion;
+        if (!ProtonManager::validVersion(protonChoice)) {
+            QMessageBox::warning(this, "Invalid GE-Proton Version", "Select an option or enter an official release tag such as GE-Proton9-27.");
+            return;
+        }
+        m_result.protonVersion = protonChoice;
         m_result.theme = m_darkRadio->isChecked() ? "Dark" : "Light";
         m_result.closeBehavior = m_closeAfterRadio->isChecked() ? "Close After Game Ends" : "Stay Open";
         m_result.syncDelay = m_syncDelaySpin->value();

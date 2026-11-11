@@ -113,9 +113,14 @@ ctest --test-dir build --output-on-failure
 ## GE-Proton on Linux
 
 In Settings, enable **Download GE-Proton and launch with UMULauncher**. On the
-next launch, GDLauncher downloads the latest official GE-Proton release for your
-CPU and the portable UMU launcher. Download and unpacking progress appears in the
-main window's progress bar; later launches reuse the installed runtime.
+next launch, GDLauncher downloads the selected official GE-Proton release for your
+CPU and the portable UMU launcher. Settings has a default GE-Proton version, and
+each instance can inherit it or select its own. Automatic uses GE-Proton9-27 for
+standalone MegaHack (hackpro.dll and hackproldr.dll) to avoid the invisible overlay
+on newer Proton with NVIDIA; other installations use the latest cached release.
+You can also enter an official release tag, such as GE-Proton10-1. Download and unpacking progress appears in the
+main window's progress bar; later launches reuse the installed runtime. Each release
+is cached separately, while instance saves use the same launcher prefix.
 
 GE-Proton and UMU are stored under `~/.config/gdlauncher/Runtimes`, with a separate
 prefix in `~/.config/gdlauncher/ProtonPrefix`. Instance saves sync into that prefix

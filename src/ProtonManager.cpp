@@ -11,13 +11,31 @@
 #include <QProcess>
 #include <QSysInfo>
 #include <QStandardPaths>
+#include <QRegularExpression>
 #ifdef Q_OS_LINUX
 #include <sys/resource.h>
 #endif
 
 ProtonManager::ProtonManager(QObject *parent) : QObject(parent) {}
 
-QString ProtonManager::protonDir() { return Settings::baseDir() + "/Runtimes/GE-Proton"; }
+QString ProtonManager::protonDir(const QString &version) {
+    return Settings::baseDir() + "/Runtimes/" + (version.isEmpty() ? "GE-Proton" : version);
+}
+bool ProtonManager::validVersion(const QString &version) {
+    static const QRegularExpression tag("^GE-Proton[0-9]+-[0-9]+(?:-[A-Za-z0-9_.]+)*$");
+    return version.isEmpty() || version == "auto" || version == "latest" || tag.match(version).hasMatch();
+}
+QString ProtonManager::selectVersion(const QString &directory, const QString &choice) {
+    if (choice == "auto" || choice.isEmpty()) {
+        const auto files = QDir(directory).entryList(QDir::Files);
+        // Standalone MegaHack uses the older OpenGL overlay. Newer Proton's
+        // NVIDIA/X11 rendering can leave that overlay interactive but invisible.
+        if (files.contains("hackpro.dll", Qt::CaseInsensitive) &&
+            files.contains("hackproldr.dll", Qt::CaseInsensitive)) return "GE-Proton9-27";
+        return {};
+    }
+    return choice == "latest" ? QString() : choice;
+}
 QString ProtonManager::launcherPath() { return Settings::baseDir() + "/Runtimes/umu/umu-run"; }
 QString ProtonManager::prefixDir() { return Settings::baseDir() + "/ProtonPrefix"; }
 
@@ -38,9 +56,9 @@ void ProtonManager::configureProcess(QProcess *process) {
 #endif
 }
 
-QProcessEnvironment ProtonManager::environment() {
+QProcessEnvironment ProtonManager::environment(const QString &version) {
     auto env = QProcessEnvironment::systemEnvironment();
-    env.insert("PROTONPATH", protonDir());
+    env.insert("PROTONPATH", protonDir(version));
     env.insert("WINEPREFIX", prefixDir());
     env.insert("GAMEID", "0");
     // Explorer and background Wine services can outlive their window. Waiting
@@ -49,9 +67,13 @@ QProcessEnvironment ProtonManager::environment() {
     return env;
 }
 
-void ProtonManager::ensureReady() {
+void ProtonManager::ensureReady(const QString &version) {
     if (m_busy) return;
     m_busy = true;
+    if (!validVersion(version) || version == "auto" || version == "latest") {
+        finish(false, "Invalid GE-Proton release tag: " + version); return;
+    }
+    m_version = version;
     if (QStandardPaths::findExecutable("python3").isEmpty() || QStandardPaths::findExecutable("tar").isEmpty()) {
         finish(false, "GE-Proton requires Python 3.10 or newer and tar. Please install them and try again.");
         return;
@@ -80,7 +102,7 @@ void ProtonManager::finish(bool success, const QString &error) {
 }
 
 void ProtonManager::ensureComponent(bool proton) {
-    const QString required = proton ? protonDir() + "/proton" : launcherPath();
+    const QString required = proton ? protonDir(m_version) + "/proton" : launcherPath();
     if (QFileInfo::exists(required)) {
         if (proton) ensureComponent(false);
         else initializePrefix();
@@ -91,10 +113,11 @@ void ProtonManager::ensureComponent(bool proton) {
         finish(false, "GE-Proton is only available for x86_64 and aarch64 Linux.");
         return;
     }
-    emit statusUpdate(proton ? "Finding the latest GE-Proton release..." : "Finding the portable Proton launcher...");
+    emit statusUpdate(proton ? (m_version.isEmpty() ? "Finding the latest GE-Proton release..." : "Finding " + m_version + "...") : "Finding the portable Proton launcher...");
     emit progress(-1);
     const QString repo = proton ? "GloriousEggroll/proton-ge-custom" : "Open-Wine-Components/umu-launcher";
-    QNetworkRequest req{QUrl("https://api.github.com/repos/" + repo + "/releases/latest")};
+    const QString release = proton && !m_version.isEmpty() ? "tags/" + m_version : "latest";
+    QNetworkRequest req{QUrl("https://api.github.com/repos/" + repo + "/releases/" + release)};
     req.setRawHeader("Accept", "application/vnd.github+json");
     req.setTransferTimeout(60000);
     auto *reply = m_net.get(req);
@@ -189,7 +212,7 @@ void ProtonManager::extract(bool proton) {
                 if (QFileInfo::exists(destination + "/" + dir + "/" + marker)) source = destination + "/" + dir;
             }
             if (source.isEmpty()) { finish(false, "The downloaded runtime is missing " + marker + "."); return; }
-            const QString target = proton ? protonDir() : QFileInfo(launcherPath()).absolutePath();
+            const QString target = proton ? protonDir(m_version) : QFileInfo(launcherPath()).absolutePath();
             if (QFileInfo::exists(target) && !QDir(target).removeRecursively()) { finish(false, "Could not replace an incomplete runtime."); return; }
             if (!QDir().rename(source, target)) { finish(false, "Could not install the downloaded runtime."); return; }
             m_staging.reset();
@@ -208,7 +231,7 @@ void ProtonManager::initializePrefix() {
     emit progress(-1);
     auto *process = new QProcess(this);
     configureProcess(process);
-    process->setProcessEnvironment(environment());
+    process->setProcessEnvironment(environment(m_version));
     connect(process, &QProcess::readyReadStandardOutput, this, [process]() { process->readAllStandardOutput(); });
     connect(process, &QProcess::errorOccurred, this, [this, process](QProcess::ProcessError error) {
         if (error == QProcess::FailedToStart) { process->deleteLater(); finish(false, "Could not start python3 for the Proton launcher."); }
