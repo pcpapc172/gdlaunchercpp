@@ -78,6 +78,11 @@ InstanceDialog::InstanceDialog(QWidget *parent, bool editMode, const QJsonObject
 
     m_saveFolderEdit = new QLineEdit("GeometryDash", this);
     form->addRow("Save Folder Name:", m_saveFolderEdit);
+    m_argumentsEdit = new QLineEdit(this);
+    m_argumentsEdit->setObjectName("instanceArguments");
+    m_argumentsEdit->setPlaceholderText("Optional arguments, e.g. --flag \"value with spaces\"");
+    m_argumentsEdit->setToolTip("Arguments passed to the selected executable (or Steam emulator). Quote values containing spaces. These are not shell commands or environment variables.");
+    form->addRow("Launch Arguments:", m_argumentsEdit);
 
     root->addLayout(form);
 
@@ -144,6 +149,7 @@ InstanceDialog::InstanceDialog(QWidget *parent, bool editMode, const QJsonObject
 
     if (editMode) {
         m_nameEdit->setText(existingData.value("name").toString());
+        m_argumentsEdit->setText(existingData.value("arguments").toString());
         const bool isLocal = existingData.value("versionType").toString("local") == "local";
         m_localRadio->setChecked(isLocal);
         m_customRadio->setChecked(!isLocal);
@@ -281,6 +287,7 @@ void InstanceDialog::onSave() {
 
     QJsonObject data;
     data["name"] = name;
+    data["arguments"] = m_argumentsEdit->text();
     const bool isLocal = m_localRadio->isChecked();
     data["versionType"] = isLocal ? "local" : "custom";
     data["saveFolderName"] = m_saveFolderEdit->text().trimmed();

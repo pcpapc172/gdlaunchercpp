@@ -61,6 +61,7 @@ set(APP_SOURCES
     src/ProtonManager.cpp
     src/ProcessTracker.cpp
     src/BackupManager.cpp
+    src/GameLogReader.cpp
     src/NongManager.cpp
     src/ConsoleWindow.cpp
     src/UpdateChecker.cpp
@@ -92,6 +93,7 @@ set(APP_HEADERS
     src/ProtonManager.h
     src/ProcessTracker.h
     src/BackupManager.h
+    src/GameLogReader.h
     src/NongManager.h
     src/ConsoleWindow.h
     src/UpdateChecker.h
@@ -227,6 +229,7 @@ if(GDLAUNCHER_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         src/GameLauncher.cpp src/GameLauncher.h
         src/ProcessTracker.cpp src/ProcessTracker.h
         src/BackupManager.cpp src/BackupManager.h
+        src/GameLogReader.cpp src/GameLogReader.h
         src/ui/CloseGuard.cpp src/ui/CloseGuard.h
         src/ui/BackupsDialog.cpp src/ui/BackupsDialog.h
         src/NongManager.cpp src/NongManager.h

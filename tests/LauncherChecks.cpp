@@ -210,6 +210,42 @@ void start(QProcess &process, const QString &path, const QStringList &args, cons
     check(process.waitForStarted(), "start fixture process");
 }
 void checks(const QString &self) {
+    {
+        QTemporaryDir directory;
+        const auto old = directory.path() + "/old.log";
+        put(old, "historical line\n");
+        GameLogReader reader;
+        QStringList lines;
+        QObject::connect(&reader, &GameLogReader::logLine, &reader, [&](const QString &line) { lines << line; });
+        reader.start({directory.path()});
+        reader.poll();
+        check(lines.isEmpty(), "live game logs skip historical content");
+        QFile file(old);
+        check(file.open(QIODevice::Append), "append game log fixture");
+        file.write("current partial"); file.flush();
+        reader.poll();
+        check(lines.isEmpty(), "live reader buffers partial lines");
+        file.write(" line\n"); file.close();
+        reader.poll();
+        check(lines == QStringList{"[geode] current partial line"}, "live game lines reach console");
+        put(directory.path() + "/restart.log", "restart output\n");
+        reader.poll();
+        check(lines.last() == "[geode] restart output", "reader discovers restart logs");
+        put(old, "short\n");
+        reader.poll();
+        check(lines.last() == "[geode] short", "reader handles truncated logs");
+        reader.stop();
+    }
+    {
+        QTemporaryDir dlls;
+        put(dlls.path() + "/XInput9_1_0.dll", "fixture");
+        put(dlls.path() + "/CustomPlugin.DLL", "fixture");
+        put(dlls.path() + "/ignore.exe", "fixture");
+        const auto overrides = GameLauncher::localDllOverrides(dlls.path(), "other=b;customplugin=d");
+        check(overrides.contains("xinput9_1_0=n,b") && overrides.contains("customplugin=n,b") &&
+              overrides.contains("other=b") && !overrides.contains("customplugin=d") && !overrides.contains("ignore"),
+              "all local DLLs prefer native without dropping unrelated overrides");
+    }
     auto checkCloseConfirmation = [](bool force, bool confirmForce, bool allowForce = true, bool confirmTwice = true) {
         int firstDialogs = 0, secondDialogs = 0;
         QSet<QString> handled;
@@ -336,7 +372,7 @@ void checks(const QString &self) {
 
     // A fake Wine executable runs a native fixture, exercising the actual
     // launcher lifecycle and worker transfers without touching real saves.
-    put(bin + "/wine", "#!/bin/sh\nexec \"$@\"\n");
+    put(bin + "/wine", "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$HOME/game-arguments\"\nexec \"$1\"\n");
     QFile::setPermissions(bin + "/wine", QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
     settings.theme = "Dark";
     Settings::save(settings);
@@ -345,8 +381,11 @@ void checks(const QString &self) {
     check(QFile::link(self, version + "/GeometryDash.exe"), "create installed game fixture");
     QJsonObject instance{{"name", "test"}, {"versionType", "local"}, {"version", "test/game"},
                          {"saveFolderName", "GeometryDash"}, {"isGeodeCompatible", true}, {"useMegaHack", false}};
+    instance["arguments"] = "--example \"value with spaces\"";
     check(InstanceManager::createInstance(instance).success, "create test instance");
     const QString instancePath = Settings::instancesDir() + "/test";
+    check(QJsonDocument::fromJson(get(instancePath + "/instance.json")).object().value("arguments").toString() ==
+          instance.value("arguments").toString(), "instance launch arguments persist");
     put(instancePath + "/CCGameManager.dat", "before game");
     put(instancePath + "/.hidden-save", "hidden instance data");
     const QByteArray payload(64 * 1024, 'x');
@@ -370,6 +409,8 @@ void checks(const QString &self) {
     check(waitUntil([&]() { return completed; }, 15000), "own game exits and syncs despite unrelated process");
     check(started && prepProgress > 0 && syncProgress > 0 && ticks > 10, "UI remains responsive with live copying status");
     check(get(instancePath + "/CCGameManager.dat") == "from launched game", "sync back actual game progress");
+    check(get(temporary.path() + "/game-arguments").endsWith("--example\nvalue with spaces\n"),
+          "launch arguments reach Wine with quoted values intact");
     const auto firstBackup = BackupManager::createScheduled("test");
     check(firstBackup.success && !firstBackup.created, "launch already created today's persistent backup");
     check(QFileInfo(firstBackup.path).fileName().startsWith("test-"), "backup folder is instance name and timestamp");
@@ -514,14 +555,14 @@ root = pathlib.Path(os.environ['HOME'])
 (root / 'umu-environment').write_text(json.dumps(dict(os.environ)))
 )PY");
     completed = false;
-    launcher.runExecutable("explorer.exe", true);
+    launcher.runExecutable("explorer.exe");
     check(waitUntil([&]() { return completed; }), "UMU tool lifecycle completes");
     check(QJsonDocument::fromJson(get(temporary.path() + "/umu-arguments")).array().first().toString() == "explorer.exe", "Explorer opens through UMU");
     const auto toolEnv = QJsonDocument::fromJson(get(temporary.path() + "/umu-environment")).object();
     check(toolEnv.value("WINEPREFIX").toString() == ProtonManager::prefixDir(), "UMU tool uses dedicated prefix");
     check(toolEnv.value("PROTONPATH").toString() == ProtonManager::protonDir(), "UMU tool uses installed GE-Proton");
     check(toolEnv.value("PROTON_VERB").toString() == "run", "UMU launches do not wait for existing prefix services or Explorer");
-    check(toolEnv.value("WINEDLLOVERRIDES").toString() == "xinput1_4=n,b", "UMU tool keeps Geode override");
+    check(!toolEnv.value("WINEDLLOVERRIDES").toString().contains("xinput1_4=n,b"), "Explorer has no hard-coded game DLL override");
     nongChecks(temporary.path());
     unrelated.kill(); unrelated.waitForFinished();
     qputenv("PATH", originalPath.toUtf8());

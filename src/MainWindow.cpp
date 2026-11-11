@@ -213,6 +213,9 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
         if (m_consoleWindow) m_consoleWindow->setRunning(running);
     });
     connect(m_logPipe, &LogPipeServer::logLine, this, &MainWindow::appendLog);
+#ifdef Q_OS_WIN
+    m_logPipe->start();
+#endif
 
     connect(m_updateChecker, &UpdateChecker::statusUpdate, this, [this](const QString &msg) { m_statusLabel->setText(msg); });
     connect(m_updateChecker, &UpdateChecker::progress, this, [this](int p) { m_progressBar->setAnimatedValue(p); });
@@ -260,10 +263,10 @@ void MainWindow::runStartupChecks() {
         Settings::save(m_settings);
 
         const QStringList entries = {
-            "Closing is blocked while an instance, backup, or file operation is active. Force close requires a second confirmation by default.",
-            "Instances are backed up before their first launch each day. Settings controls backup frequency, folder, contents, retention, and close protection.",
-            "The new Backups window supports searching, selecting, restoring, forking, and deleting snapshots.",
-            "Restore requires two warnings and always saves a full safety backup of the current instance before replacing it."
+            "Added per-instance Launch Arguments, preserving quoted values on Windows, Wine, and GE-Proton.",
+            "Wine and GE-Proton now prefer local DLLs found in the executable folder, supporting legacy Geode loaders without a hard-coded XInput override.",
+            "The Linux log console now reads live Geode log files, including new logs after game restarts.",
+            "Started the Windows named-pipe log server so the advanced logging mod can connect."
         };
         ChangelogDialog dlg(this, m_appVersion, entries);
         dlg.exec();
@@ -332,12 +335,8 @@ void MainWindow::runLinuxTool(bool explorer) {
         executable = QFileDialog::getOpenFileName(this, "Launch executable", QString(), "Windows executables (*.exe);;All files (*)");
         if (executable.isEmpty()) return;
     }
-    bool geode = false;
-    for (const auto &instance : m_instances) {
-        if (instance.name == m_selectedInstance) geode = instance.data.value("isGeodeCompatible").toBool();
-    }
     setUiEnabled(false);
-    m_launcher->runExecutable(executable, geode);
+    m_launcher->runExecutable(executable);
 }
 
 void MainWindow::refreshInstances() {

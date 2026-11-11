@@ -51,6 +51,7 @@ static QByteArray httpGetSync(const QUrl &url, int timeoutMs = 8000) {
 
 GameLauncher::GameLauncher(QWidget *dialogParent, QObject *parent)
     : QObject(parent), m_dialogParent(dialogParent) {
+    connect(&m_gameLogs, &GameLogReader::logLine, this, &GameLauncher::appendLog);
     if (kIsLinux) {
         m_protonManager = new ProtonManager(this);
         connect(m_protonManager, &ProtonManager::statusUpdate, this, &GameLauncher::statusUpdate);
@@ -75,11 +76,10 @@ GameLauncher::~GameLauncher() {
     m_transferFuture.waitForFinished();
 }
 
-void GameLauncher::runExecutable(const QString &executable, bool geodeCompatible) {
+void GameLauncher::runExecutable(const QString &executable) {
     if (!kIsLinux || m_launching || m_gameRunning || m_syncing) return;
     m_launching = true;
     m_pendingTool = executable;
-    m_toolGeode = geodeCompatible;
     if (Settings::load().useProtonGE && !m_protonReady) m_protonManager->ensureReady();
     else startTool();
 }
@@ -89,7 +89,8 @@ void GameLauncher::startTool() {
     m_pendingTool.clear();
     const bool proton = Settings::load().useProtonGE;
     auto env = proton ? ProtonManager::environment() : QProcessEnvironment::systemEnvironment();
-    if (m_toolGeode) env.insert("WINEDLLOVERRIDES", "xinput1_4=n,b");
+    if (QFileInfo(executable).isAbsolute())
+        env.insert("WINEDLLOVERRIDES", localDllOverrides(QFileInfo(executable).absolutePath(), env.value("WINEDLLOVERRIDES")));
     auto *process = new QProcess(this);
     ProtonManager::configureProcess(process);
     m_toolProcess = process;
@@ -511,17 +512,25 @@ void GameLauncher::startPrepared(LaunchContext ctx, bool useProton) {
     ProtonManager::configureProcess(m_gameProcess);
     m_processTracker.configureProcess(m_gameProcess);
     m_gameProcess->setWorkingDirectory(ctx.versionPath);
+    const QStringList arguments = QProcess::splitCommand(data.value("arguments").toString());
+    const AppSettings settings = Settings::load();
+    ctx.syncDelay = qMax(0, settings.syncDelay) * 1000;
+    ctx.enableLogOutput = settings.enableLogOutput;
+    m_logBuffer.clear();
+    if (kIsLinux && ctx.enableLogOutput) {
+        m_gameLogs.start({ctx.versionPath + "/geode/logs", ctx.localAppDataPath + "/geode/logs"});
+        appendLog("[log] Reading live Geode logs from " + ctx.versionPath + "/geode/logs");
+    }
     if (kIsLinux) {
         QProcessEnvironment env = useProton ? ProtonManager::environment() : QProcessEnvironment::systemEnvironment();
-        if (data.value("isGeodeCompatible").toBool(false)) {
-            env.insert("WINEDLLOVERRIDES", "xinput1_4=n,b");
-        }
+        env.insert("WINEDLLOVERRIDES", localDllOverrides(ctx.versionPath, env.value("WINEDLLOVERRIDES")));
         env.insert("GDLAUNCHER_SESSION", m_processTracker.token());
         m_gameProcess->setProcessEnvironment(env);
-        if (useProton) m_gameProcess->start("python3", {ProtonManager::launcherPath(), ctx.exePath});
-        else m_gameProcess->start("wine", {ctx.exePath});
+        if (useProton) m_gameProcess->start("python3", QStringList{ProtonManager::launcherPath(), ctx.exePath} + arguments);
+        else m_gameProcess->start("wine", QStringList{ctx.exePath} + arguments);
     } else {
         m_gameProcess->setProgram(ctx.exePath);
+        m_gameProcess->setArguments(arguments);
         m_gameProcess->start();
     }
 
@@ -530,14 +539,10 @@ void GameLauncher::startPrepared(LaunchContext ctx, bool useProton) {
     emit gameStarted();
     emit logStatusChanged(true);
 
-    const AppSettings settings = Settings::load();
-    ctx.syncDelay = qMax(0, settings.syncDelay) * 1000;
-    ctx.enableLogOutput = settings.enableLogOutput;
     ctx.processName = !ctx.gameProcessName.isEmpty() ? ctx.gameProcessName : QFileInfo(ctx.exePath).fileName();
 
     deployGeodeLogModIfNeeded(ctx);
 
-    m_logBuffer.clear();
     if (ctx.enableLogOutput) {
         connect(m_gameProcess, &QProcess::readyReadStandardOutput, this, [this, process = m_gameProcess]() {
             const auto lines = QString::fromLocal8Bit(process->readAllStandardOutput()).split('\n', Qt::SkipEmptyParts);
@@ -550,6 +555,23 @@ void GameLauncher::startPrepared(LaunchContext ctx, bool useProton) {
     }
 
     beginMonitor(ctx);
+}
+
+QString GameLauncher::localDllOverrides(const QString &directory, const QString &existing) {
+    QStringList loaders;
+    for (const auto &file : QDir(directory).entryList(QDir::Files)) {
+        const auto name = file.toLower();
+        if (name.endsWith(".dll") && name.size() > 4 && !loaders.contains(name.chopped(4))) loaders << name.chopped(4);
+    }
+    QStringList overrides;
+    for (const auto &entry : existing.split(';', Qt::SkipEmptyParts)) {
+        const auto names = entry.section('=', 0, 0).toLower().split(',');
+        QStringList remaining;
+        for (const auto &name : names) if (!loaders.contains(name.trimmed())) remaining << name;
+        if (!remaining.isEmpty()) overrides << remaining.join(',') + "=" + entry.section('=', 1);
+    }
+    for (const auto &loader : loaders) overrides << loader + "=n,b";
+    return overrides.join(';');
 }
 
 void GameLauncher::beginMonitor(LaunchContext ctx) {
@@ -618,6 +640,7 @@ void GameLauncher::watchForExit(LaunchContext ctx) {
 }
 
 void GameLauncher::postLaunchCleanup(LaunchContext ctx) {
+    m_gameLogs.stop();
     m_syncing = true;
     emit statusUpdate(QString("Syncing data for %1...").arg(ctx.instanceName));
     GD_DEBUG_LOG("transfer", QString("Syncing game save folder -> instance '%1': %2")
@@ -663,6 +686,7 @@ void GameLauncher::finishCleanup(LaunchContext ctx) {
 }
 
 void GameLauncher::deployGeodeLogModIfNeeded(const LaunchContext &ctx) {
+    if (kIsLinux) return; // Native file reader replaces the Windows-only pipe mod.
     if (!(ctx.data.value("enableGeodeLogging").toBool(false) &&
           ctx.data.value("isGeodeCompatible").toBool(false) &&
           !ctx.data.value("geodeLogModVersion").toString().isEmpty()))

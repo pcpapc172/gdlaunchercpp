@@ -119,8 +119,14 @@ main window's progress bar; later launches reuse the installed runtime.
 
 GE-Proton and UMU are stored under `~/.config/gdlauncher/Runtimes`, with a separate
 prefix in `~/.config/gdlauncher/ProtonPrefix`. Instance saves sync into that prefix
-and back after the game exits. Geode-compatible instances also receive the
-`WINEDLLOVERRIDES=xinput1_4=n,b` override. Disabling the option returns to Wine.
+and back after the game exits. On Linux, DLLs in the executable directory are
+automatically given Wine native-then-builtin loading preference, including legacy
+and current Geode loaders. Disabling the option returns to Wine.
+
+With log output enabled, Linux reads live Geode logs from the game's and save
+folder's `geode/logs` directories alongside Wine/UMU output. Historical lines are
+skipped; newly created logs and appended lines are shown, including after restarts.
+No pipe logging mod is required on Linux. Unmodded games may not emit game logs.
 
 This option requires Python 3.10 or newer and tar, plus working graphics/Vulkan drivers.
 [UMU](https://github.com/Open-Wine-Components/umu-launcher) runs Proton outside
@@ -151,3 +157,5 @@ src/
     SaveEditorDialog.*         # save editor modal
 third_party/miniz/           # vendored zip read/write (public domain)
 ```
+
+Instance Create/Edit includes a **Launch Arguments** field. Quoted values retain spaces; arguments are passed directly to the selected executable (including a Steam emulator), without shell expansion.

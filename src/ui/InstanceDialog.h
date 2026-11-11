@@ -40,6 +40,7 @@ private:
     QComboBox *m_localVersionCombo;
     QLineEdit *m_exePathEdit;
     QLineEdit *m_saveFolderEdit;
+    QLineEdit *m_argumentsEdit;
     QCheckBox *m_geodeCheck;
     QCheckBox *m_megahackCheck;
     QCheckBox *m_steamEmuCheck;

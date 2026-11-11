@@ -10,6 +10,7 @@
 #include <functional>
 #include <QFuture>
 #include "BackupManager.h"
+#include "GameLogReader.h"
 
 class ProtonManager;
 
@@ -30,7 +31,8 @@ public:
     // Kicks off the (mostly synchronous, some async via timers) launch sequence.
     void launchInstance(const QString &instanceName);
     void terminateGame();
-    void runExecutable(const QString &executable, bool geodeCompatible = false);
+    void runExecutable(const QString &executable);
+    static QString localDllOverrides(const QString &versionDirectory, const QString &existing);
 
     // Used on first run to offer importing pre-existing local save data.
     // Returns true if unmanaged files were found (and handled).
@@ -60,10 +62,10 @@ private:
     bool m_protonReady = false;
     QString m_pendingInstance;
     QString m_pendingTool;
-    bool m_toolGeode = false;
     ProcessTracker m_processTracker;
     QFuture<bool> m_transferFuture;
     QFuture<BackupResult> m_backupFuture;
+    GameLogReader m_gameLogs;
 
     struct LaunchContext {
         QString instanceName;
