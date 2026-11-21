@@ -56,6 +56,7 @@ set(APP_SOURCES
     src/Settings.cpp
     src/DebugLog.cpp
     src/InstanceManager.cpp
+    src/InstanceUpdater.cpp
     src/VersionManager.cpp
     src/GameLauncher.cpp
     src/ProtonManager.cpp
@@ -88,6 +89,7 @@ set(APP_HEADERS
     src/Settings.h
     src/DebugLog.h
     src/InstanceManager.h
+    src/InstanceUpdater.h
     src/VersionManager.h
     src/GameLauncher.h
     src/ProtonManager.h
@@ -237,7 +239,7 @@ if(GDLAUNCHER_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         src/VersionManager.cpp src/VersionManager.h
         src/ui/DownloadsDialog.cpp src/ui/DownloadsDialog.h
         src/ProtonManager.cpp src/ProtonManager.h
-        src/InstanceManager.cpp src/Settings.cpp src/DebugLog.cpp src/DebugLog.h
+        src/InstanceManager.cpp src/InstanceUpdater.cpp src/InstanceUpdater.h src/Settings.cpp src/DebugLog.cpp src/DebugLog.h
         src/ui/SettingsDialog.cpp src/ui/SettingsDialog.h
         src/ui/Theme.cpp src/ui/Animations.cpp src/ui/Animations.h
         resources/resources.qrc)

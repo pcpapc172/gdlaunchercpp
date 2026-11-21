@@ -24,6 +24,8 @@ public:
     static QStringList getAllManagedItems();
     static QStringList getManagedItems(bool isGeode, bool useMegahack);
 
+    static QString installationDir(const QJsonObject &data);
+    static QString updateManifest(const QJsonObject &data);
     static QVector<InstanceInfo> getInstances();
     static QVector<QPair<QString, qint64>> calculateInstanceSizes();
 

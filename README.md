@@ -164,3 +164,27 @@ third_party/miniz/           # vendored zip read/write (public domain)
 ```
 
 Instance Create/Edit includes a **Launch Arguments** field. Quoted values retain spaces; arguments are passed directly to the selected executable (including a Steam emulator), without shell expansion.
+
+### Instance updates
+
+Open **Edit** on an instance and set its **Update Manifest URL**. Game archives can also supply an
+`update_manifest` URL in their `version.json`. **Updates** shows the available versions and counts
+instances with pending updates. The automatic check runs before launch by default and can be
+disabled per instance. Instances that share an installation folder also share the updated files.
+
+Publish a JSON manifest and its files over HTTPS. For example, generate a manifest by listing the
+files the publisher manages:
+
+```sh
+python3 tools/make-update-manifest.py 2.2091-r2 ./release GeometryDash.exe Resources/game.zip > latest.json
+```
+
+Serve `latest.json` and upload those payloads at `files/GeometryDash.exe` and
+`files/Resources/game.zip` relative to it, or set `--url-prefix`. Publish the payloads before
+switching the manifest to a new release. Use a new `version` label each time you change the file list
+or any file contents. The schema uses `formatVersion: 1`, a string `version`, and `files` entries
+with `path`, `size` (bytes), `sha256` (hex), and `url` (relative or absolute).
+
+Each listed local file is checked by SHA-256. The updater downloads changed and missing files
+and verifies them before changing the installation. Files omitted from the manifest are preserved.
+Publish only game files and mod packages. Instance saves and Geode logs are excluded.

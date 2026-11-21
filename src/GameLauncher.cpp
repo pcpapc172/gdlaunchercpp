@@ -1,4 +1,5 @@
 #include "GameLauncher.h"
+#include "InstanceUpdater.h"
 #include "Settings.h"
 #include "InstanceManager.h"
 #include "DebugLog.h"
@@ -384,11 +385,17 @@ void GameLauncher::launchInstance(const QString &instanceName) {
         ctx.exePath = data.value("executablePath").toString();
         ctx.versionPath = QFileInfo(ctx.exePath).absolutePath();
     } else {
-        ctx.versionPath = Settings::versionsDir() + "/" + data.value("version").toString();
+        ctx.versionPath = InstanceManager::installationDir(data);
     }
     GD_DEBUG_LOG("launch", QString("Resolved version path: %1").arg(ctx.versionPath));
 
-    if (!QFileInfo::exists(ctx.versionPath)) {
+    if (InstanceUpdater::needsRecovery(ctx.versionPath)) {
+        m_launching = false;
+        emit launchComplete();
+        emit statusUpdate("An instance update was interrupted. Open Updates to recover the installation.");
+        return;
+    }
+    if (ctx.versionPath.isEmpty() || !QFileInfo::exists(ctx.versionPath)) {
         GD_DEBUG_LOG("launch", "Version path does not exist");
         m_launching = false;
         emit launchComplete();

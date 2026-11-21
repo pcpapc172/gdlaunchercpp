@@ -1,4 +1,8 @@
 #include <QApplication>
+#include <QCryptographicHash>
+#include <QTcpServer>
+#include <QTcpSocket>
+#include "InstanceUpdater.h"
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
@@ -90,6 +94,79 @@ bool download(NongManager &manager, const NongSong &song, const QString &directo
     QObject::disconnect(connection);
     check(done, "NONG download completes");
     return success;
+}
+void instanceUpdateChecks(const QString &root) {
+    const QString install = root + "/updater-fixture";
+    put(install + "/GeometryDash.exe", "old");
+    put(install + "/Resources/unchanged.txt", "keep");
+    put(install + "/CCGameManager.dat", "my saves");
+    QTcpServer server;
+    check(server.listen(QHostAddress::LocalHost), "listen for the update fixture");
+    QHash<QByteArray, QByteArray> responses;
+    QHash<QByteArray, int> requests;
+    QObject::connect(&server, &QTcpServer::newConnection, &server, [&]() {
+        auto *socket = server.nextPendingConnection();
+        QObject::connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
+        QObject::connect(socket, &QIODevice::readyRead, socket, [&, socket]() {
+            if (!socket->canReadLine()) return;
+            const auto path = socket->readLine().split(' ').value(1);
+            ++requests[path];
+            const bool found = responses.contains(path);
+            const auto body = responses.value(path);
+            socket->write(QByteArray(found ? "HTTP/1.1 200 OK\r\n" : "HTTP/1.1 404 Not Found\r\n")
+                          + "Content-Length: " + QByteArray::number(body.size())
+                          + "\r\nConnection: close\r\n\r\n" + body);
+            socket->disconnectFromHost();
+        });
+    });
+    const QUrl url(QString("http://127.0.0.1:%1/latest.json").arg(server.serverPort()));
+    const auto entry = [](const QString &path, const QString &url, const QByteArray &body) {
+        return QJsonObject{{"path", path}, {"url", url}, {"size", body.size()},
+            {"sha256", QString::fromLatin1(QCryptographicHash::hash(body, QCryptographicHash::Sha256).toHex())}};
+    };
+    const auto publish = [&](const QString &version, const QJsonArray &files) {
+        responses["/latest.json"] = QJsonDocument(
+            QJsonObject{{"formatVersion", 1}, {"version", version}, {"files", files}}).toJson();
+    };
+    const auto exe = entry("GeometryDash.exe", "game", "new");
+    const auto unchanged = entry("Resources/unchanged.txt", "unchanged", "keep");
+    responses["/game"] = "new";
+    publish("2.2", {exe, unchanged});
+    std::atomic_bool cancelled(false);
+    const auto scan = InstanceUpdater::run(install, url, false, cancelled);
+    check(scan.available && scan.version == "2.2" && requests["/game"] == 0, "scan only fetches metadata");
+    const auto update = InstanceUpdater::run(install, url, true, cancelled);
+    check(update.error.isEmpty() && update.downloaded == 1 && requests["/game"] == 1 &&
+          requests["/unchanged"] == 0, "updater downloads only the changed file");
+    check(get(install + "/GeometryDash.exe") == "new" &&
+          get(install + "/CCGameManager.dat") == "my saves" &&
+          InstanceUpdater::installedVersion(install) == "2.2", "update preserves saves and records installed version");
+
+    publish("2.3", {entry("GeometryDash.exe", "game", "next"), entry("asset", "corrupt", "good")});
+    responses["/game"] = "next";
+    responses["/corrupt"] = "fail";
+    const auto invalid = InstanceUpdater::run(install, url, true, cancelled);
+    check(invalid.error.contains("SHA-256") && get(install + "/GeometryDash.exe") == "new" &&
+          !QFileInfo::exists(install + "/asset") && InstanceUpdater::installedVersion(install) == "2.2",
+          "checksum failure leaves the entire installation unchanged");
+
+    publish("2.3", {entry("../outside", "game", "next")});
+    check(!InstanceUpdater::run(install, url, true, cancelled).error.isEmpty(), "reject escaping paths");
+    publish("2.3", {entry("CCGameManager.dat", "game", "next")});
+    check(!InstanceUpdater::run(install, url, true, cancelled).error.isEmpty(), "reject save paths");
+    publish("2.3", {entry("linked/out", "game", "next")});
+    check(QFile::link(root, install + "/linked"), "create a symlink fixture");
+    check(!InstanceUpdater::run(install, url, true, cancelled).error.isEmpty(), "reject symlinked directories");
+
+    const QString work = install + "/.gdlauncher-update";
+    put(work + "/journal.json", R"([{"path":"GeometryDash.exe","existed":true},{"path":"extra","existed":false}])");
+    put(work + "/previous/0", "new");
+    put(install + "/GeometryDash.exe", "interrupted");
+    put(install + "/extra", "newly installed");
+    check(InstanceUpdater::needsRecovery(install), "detect interrupted update");
+    check(InstanceUpdater::run(install, {}, true, cancelled).error.isEmpty() &&
+          get(install + "/GeometryDash.exe") == "new" && !QFileInfo::exists(install + "/extra") &&
+          !InstanceUpdater::needsRecovery(install), "recover both replaced and newly installed files");
 }
 void nongChecks(const QString &root) {
     AppSettings settings = Settings::load();
@@ -594,6 +671,7 @@ root = pathlib.Path(os.environ['HOME'])
     check(pinnedEnv.value("PROTONPATH").toString() == ProtonManager::protonDir(settings.protonVersion),
           "tools honor changed default runtime rather than cached readiness");
 
+    instanceUpdateChecks(temporary.path());
     nongChecks(temporary.path());
     unrelated.kill(); unrelated.waitForFinished();
     qputenv("PATH", originalPath.toUtf8());

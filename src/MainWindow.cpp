@@ -39,6 +39,13 @@
 #include <QApplication>
 #include <QIcon>
 #include <QFileDialog>
+#include <algorithm>
+#include <QDir>
+#include <QFileInfo>
+#include <QDialogButtonBox>
+#include <QFutureWatcher>
+#include <QPointer>
+#include <QtConcurrentRun>
 
 static QString formatSize(qint64 bytes) {
     if (bytes < 0) return "…";
@@ -91,6 +98,18 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     btnCol->setSpacing(UiMetrics::kTightSpacing);
     m_launchBtn = new QPushButton(style->standardIcon(QStyle::SP_MediaPlay), "Launch", this);
     m_launchBtn->setObjectName("primary");
+    m_updatesBtn = new QPushButton("Updates", this);
+    m_updatesBtn->setStyleSheet("padding-right: 26px;");
+    m_updatesBadge = new QLabel(m_updatesBtn);
+    m_updatesBadge->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_updatesBadge->setAlignment(Qt::AlignCenter);
+    m_updatesBadge->setMinimumSize(20, 20);
+    m_updatesBadge->setStyleSheet("background: #c62828; color: white; border-radius: 10px; font-weight: bold;");
+    auto *badgeLayout = new QHBoxLayout(m_updatesBtn);
+    badgeLayout->setContentsMargins(0, 0, 6, 0);
+    badgeLayout->addStretch();
+    badgeLayout->addWidget(m_updatesBadge, 0, Qt::AlignVCenter);
+    m_updatesBadge->hide();
     m_createBtn = new QPushButton(style->standardIcon(QStyle::SP_FileDialogNewFolder), "Create", this);
     m_editBtn = new QPushButton(style->standardIcon(QStyle::SP_FileDialogDetailedView), "Edit", this);
     m_deleteBtn = new QPushButton(style->standardIcon(QStyle::SP_TrashIcon), "Delete", this);
@@ -99,7 +118,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     m_editorBtn = new QPushButton(style->standardIcon(QStyle::SP_FileDialogContentsView), "Save Editor", this);
     m_nongBtn = new QPushButton(style->standardIcon(QStyle::SP_MediaVolume), "NONG Downloader", this);
     m_settingsBtn = new QPushButton(style->standardIcon(QStyle::SP_ComputerIcon), "Settings", this);
-    for (QPushButton *b : {m_launchBtn, m_createBtn, m_editBtn, m_deleteBtn, m_downloadBtn, m_editorBtn, m_nongBtn})
+    for (QPushButton *b : {m_launchBtn, m_createBtn, m_editBtn, m_deleteBtn, m_downloadBtn, m_updatesBtn, m_editorBtn, m_nongBtn})
         btnCol->addWidget(b);
 #ifdef Q_OS_LINUX
     m_runExeBtn = new QPushButton(style->standardIcon(QStyle::SP_MediaPlay), "Launch executable", this);
@@ -121,7 +140,16 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     m_progressBar->setRange(0, 100);
     m_progressBar->setTextVisible(false);
     m_progressBar->setValue(0);
-    root->addWidget(m_progressBar);
+    auto *progressRow = new QHBoxLayout;
+    progressRow->addWidget(m_progressBar, 1);
+    m_cancelUpdate = new QPushButton("Cancel Update", this);
+    m_cancelUpdate->hide();
+    progressRow->addWidget(m_cancelUpdate);
+    root->addLayout(progressRow);
+    connect(m_cancelUpdate, &QPushButton::clicked, this, [this]() {
+        if (m_updateCancel) m_updateCancel->store(true);
+        m_cancelUpdate->setEnabled(false);
+    });
 
     m_statusLabel = new QLabel("Ready", this);
     m_statusLabel->setObjectName("statusLabel");
@@ -176,6 +204,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 
     connect(m_table, &QTableWidget::itemSelectionChanged, this, &MainWindow::onSelectionChanged);
     connect(m_launchBtn, &QPushButton::clicked, this, &MainWindow::onLaunch);
+    connect(m_updatesBtn, &QPushButton::clicked, this, &MainWindow::showInstanceUpdates);
     connect(m_createBtn, &QPushButton::clicked, this, &MainWindow::onCreate);
     connect(m_editBtn, &QPushButton::clicked, this, &MainWindow::onEdit);
     connect(m_deleteBtn, &QPushButton::clicked, this, &MainWindow::onDelete);
@@ -225,9 +254,12 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     });
 
     refreshInstances();
+    auto *instanceUpdateTimer = new QTimer(this);
+    connect(instanceUpdateTimer, &QTimer::timeout, this, [this]() { scanInstanceUpdates(); });
+    instanceUpdateTimer->start(15 * 60 * 1000);
 
     QTimer::singleShot(3000, this, [this]() {
-        if (!m_launcher->isLaunching() && !m_launcher->isGameRunning()) m_updateChecker->check(false);
+        if (!m_updateCancel && !m_launcher->isLaunching() && !m_launcher->isGameRunning()) m_updateChecker->check(false);
     });
     QTimer::singleShot(0, this, &MainWindow::runStartupChecks);
 
@@ -242,6 +274,14 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     if (kDebugLoggingEnabled || m_settings.enableLogOutput) {
         m_consoleWindow->show();
         GD_DEBUG_LOG("startup", "Live log console opened.");
+    }
+}
+
+MainWindow::~MainWindow() {
+    m_scanCancel->store(true);
+    if (m_updateCancel) {
+        m_updateCancel->store(true);
+        m_updateFuture.waitForFinished();
     }
 }
 
@@ -263,9 +303,9 @@ void MainWindow::runStartupChecks() {
         Settings::save(m_settings);
 
         const QStringList entries = {
-            "Fixed invisible standalone MegaHack menus on Linux by automatically selecting compatible GE-Proton 9.",
-            "Added a default GE-Proton version in Settings and per-instance overrides, including custom official release tags.",
-            "Selected GE-Proton releases download with the main progress bar and are cached separately."
+            "Updates shows available instance versions and how many updates are waiting.",
+            "Instance updates verify file hashes and download only changed or missing files.",
+            "Configure a manifest in Edit Instance to enable automatic updates before launch."
         };
         ChangelogDialog dlg(this, m_appVersion, entries);
         dlg.exec();
@@ -273,6 +313,7 @@ void MainWindow::runStartupChecks() {
 }
 
 QString MainWindow::closeBlockReason() const {
+    if (m_updateCancel) return "An instance update is in progress.";
     if (BackupManager::isBusy()) return "A backup is being copied, restored, or deleted.";
     if (m_launcher) {
         if (m_launcher->isBackingUp()) return "An instance backup is being created.";
@@ -321,7 +362,7 @@ void MainWindow::appendLog(const QString &line) {
 void MainWindow::setUiEnabled(bool enabled) {
     if (m_runExeBtn) m_runExeBtn->setEnabled(enabled);
     if (m_explorerBtn) m_explorerBtn->setEnabled(enabled);
-    for (QPushButton *b : {m_createBtn, m_downloadBtn, m_editorBtn, m_nongBtn, m_settingsBtn}) b->setEnabled(enabled);
+    for (QPushButton *b : {m_createBtn, m_downloadBtn, m_updatesBtn, m_editorBtn, m_nongBtn, m_settingsBtn}) b->setEnabled(enabled);
     onSelectionChanged();
     if (!enabled) { m_launchBtn->setEnabled(false); m_editBtn->setEnabled(false); m_deleteBtn->setEnabled(false); }
 }
@@ -339,7 +380,20 @@ void MainWindow::runLinuxTool(bool explorer) {
 }
 
 void MainWindow::refreshInstances() {
+    ++m_updateRevision;
     m_instances = InstanceManager::getInstances();
+    for (auto it = m_instanceUpdates.begin(); it != m_instanceUpdates.end();) {
+        const auto found = std::find_if(m_instances.cbegin(), m_instances.cend(),
+                                       [&](const InstanceInfo &i) { return i.name == it.key(); });
+        if (found == m_instances.cend() || InstanceManager::updateManifest(found->data).isEmpty() ||
+            (it->error.isEmpty() && it->version ==
+                 InstanceUpdater::installedVersion(InstanceManager::installationDir(found->data)) &&
+             !InstanceUpdater::needsRecovery(InstanceManager::installationDir(found->data))))
+            it = m_instanceUpdates.erase(it);
+        else ++it;
+    }
+    updateBadge();
+    QTimer::singleShot(250, this, [this]() { scanInstanceUpdates(); });
     GD_DEBUG_LOG("instances", QString("Detected %1 instance(s)").arg(m_instances.size()));
     m_table->setRowCount(m_instances.size());
     for (int i = 0; i < m_instances.size(); ++i) {
@@ -373,19 +427,223 @@ void MainWindow::onSelectionChanged() {
         if (row >= 0 && row < m_instances.size()) m_selectedInstance = m_instances[row].name;
     }
     const bool sel = !m_selectedInstance.isEmpty() && !m_launcher->isGameRunning()
-        && !m_launcher->isLaunching() && !m_launcher->isSyncing();
+        && !m_launcher->isLaunching() && !m_launcher->isSyncing() && !m_updateCancel;
     m_launchBtn->setEnabled(sel);
     m_editBtn->setEnabled(sel);
     m_deleteBtn->setEnabled(sel);
 }
 
 void MainWindow::onLaunch() {
-    if (m_selectedInstance.isEmpty()) return;
-    GD_DEBUG_LOG("launch", QString("Launch requested for instance '%1'").arg(m_selectedInstance));
+    for (const auto &instance : m_instances) {
+        if (instance.name != m_selectedInstance) continue;
+        const QString manifest = InstanceManager::updateManifest(instance.data);
+        if (!manifest.isEmpty() && instance.data.value("updateBeforeLaunch").toBool(true))
+            startInstanceUpdate(instance, true);
+        else
+            launchSelected(instance.name);
+        return;
+    }
+}
+
+void MainWindow::launchSelected(const QString &name) {
     setUiEnabled(false);
     m_progressBar->setAnimatedValue(10);
-    m_statusLabel->setText(QString("Preparing %1...").arg(m_selectedInstance));
-    m_launcher->launchInstance(m_selectedInstance);
+    m_statusLabel->setText(QString("Preparing %1…").arg(name));
+    m_launcher->launchInstance(name);
+}
+
+void MainWindow::updateBadge() {
+    int count = 0;
+    for (const auto &update : m_instanceUpdates)
+        if (update.available && update.error.isEmpty()) ++count;
+    m_updatesBadge->setText(count > 99 ? "99+" : QString::number(count));
+    m_updatesBadge->setVisible(count > 0);
+    m_updatesBtn->setAccessibleName(count ? QString("Updates (%1 available)").arg(count) : "Updates");
+}
+
+void MainWindow::scanInstanceUpdates() {
+    if (m_scanningUpdates || m_updateCancel) return;
+    struct Source { QString name; QString directory; QUrl url; };
+    QList<Source> sources;
+    for (const auto &instance : m_instances) {
+        const QString manifest = InstanceManager::updateManifest(instance.data);
+        if (!manifest.isEmpty())
+            sources.append({instance.name, InstanceManager::installationDir(instance.data), QUrl(manifest, QUrl::StrictMode)});
+    }
+    if (sources.isEmpty()) return;
+    m_scanningUpdates = true;
+    emit instanceUpdateListChanged();
+    const unsigned revision = m_updateRevision;
+    auto *watcher = new QFutureWatcher<QMap<QString, InstanceUpdater::Result>>(this);
+    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, revision]() {
+        m_scanningUpdates = false;
+        if (revision == m_updateRevision) {
+            m_instanceUpdates = watcher->result();
+            updateBadge();
+        } else {
+            QTimer::singleShot(0, this, [this]() { scanInstanceUpdates(); });
+        }
+        watcher->deleteLater();
+        emit instanceUpdateListChanged();
+    });
+    watcher->setFuture(QtConcurrent::run([sources, cancelled = m_scanCancel]() {
+        QMap<QPair<QString, QUrl>, InstanceUpdater::Result> checked;
+        QMap<QString, InstanceUpdater::Result> results;
+        for (const auto &source : sources) {
+            if (cancelled->load()) break;
+            const auto key = qMakePair(source.directory, source.url);
+            if (!checked.contains(key))
+                checked.insert(key, InstanceUpdater::run(source.directory, source.url, false, *cancelled));
+            results.insert(source.name, checked.value(key));
+        }
+        return results;
+    }));
+}
+
+void MainWindow::showInstanceUpdates() {
+    QDialog dialog(this);
+    dialog.setWindowTitle("Instance Updates");
+    dialog.resize(640, 360);
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *table = new QTableWidget(0, 3, &dialog);
+    table->setHorizontalHeaderLabels({"Instance", "Installed", "Available"});
+    table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    table->verticalHeader()->hide();
+    table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    table->setSelectionMode(QAbstractItemView::SingleSelection);
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    layout->addWidget(table);
+    QStringList names;
+    auto *details = new QLabel(&dialog);
+    details->setTextFormat(Qt::PlainText);
+    details->setWordWrap(true);
+    layout->addWidget(details);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    auto *refresh = buttons->addButton("Check Now", QDialogButtonBox::ActionRole);
+    auto *install = buttons->addButton("Update Selected", QDialogButtonBox::AcceptRole);
+    layout->addWidget(buttons);
+    const auto populate = [&]() {
+        const QString selectedName = names.value(table->currentRow());
+        names.clear();
+        table->setRowCount(0);
+        QStringList errors;
+        bool hasSources = false;
+        for (const auto &instance : m_instances) {
+            const bool recovery = InstanceUpdater::needsRecovery(InstanceManager::installationDir(instance.data));
+            if (!recovery && InstanceManager::updateManifest(instance.data).isEmpty()) continue;
+            hasSources = true;
+            const auto update = m_instanceUpdates.value(instance.name);
+            if (!update.error.isEmpty()) errors.append(instance.name + ": " + update.error);
+            if ((!update.available || !update.error.isEmpty()) && !recovery) continue;
+            const int row = table->rowCount();
+            table->insertRow(row);
+            table->setItem(row, 0, new QTableWidgetItem(instance.name));
+            table->setItem(row, 1, new QTableWidgetItem(instance.version));
+            table->setItem(row, 2, new QTableWidgetItem(recovery ? "Recovery required" : update.version));
+            names.append(instance.name);
+        }
+        QStringList messages;
+        if (m_scanningUpdates) messages.append("Checking for updates…");
+        else if (!hasSources) messages.append("Set an Update Manifest URL in Edit Instance to receive updates.");
+        else if (names.isEmpty() && errors.isEmpty()) messages.append("No instance updates available.");
+        messages.append(errors);
+        details->setText(messages.join('\n'));
+        refresh->setEnabled(hasSources && !m_scanningUpdates);
+        install->setEnabled(!names.isEmpty() && !m_launcher->isGameRunning() && !m_launcher->isLaunching());
+        if (!names.isEmpty()) table->selectRow(qMax(0, names.indexOf(selectedName)));
+    };
+    connect(this, &MainWindow::instanceUpdateListChanged, &dialog, populate);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    connect(install, &QPushButton::clicked, &dialog, &QDialog::accept);
+    connect(refresh, &QPushButton::clicked, &dialog, [this]() { scanInstanceUpdates(); });
+    populate();
+    if (dialog.exec() == QDialog::Accepted && table->currentRow() >= 0) {
+        const QString name = names.value(table->currentRow());
+        for (const auto &instance : m_instances) {
+            if (instance.name == name) { startInstanceUpdate(instance, false); break; }
+        }
+    }
+}
+
+void MainWindow::startInstanceUpdate(const InstanceInfo &instance, bool thenLaunch) {
+    if (m_updateCancel || m_launcher->isGameRunning() || m_launcher->isLaunching() ||
+        m_launcher->isSyncing() || m_launcher->isToolRunning()) return;
+    const QString name = instance.name;
+    const QString directory = InstanceManager::installationDir(instance.data);
+    const QUrl manifest(InstanceManager::updateManifest(instance.data), QUrl::StrictMode);
+    if (m_versionManager->hasActiveOperations()) {
+        if (thenLaunch && !InstanceUpdater::needsRecovery(directory)) launchSelected(name);
+        else QMessageBox::information(this, "Version Download Active", "Wait for the version download to finish before updating.");
+        return;
+    }
+    const QString root = QFileInfo(directory).canonicalFilePath();
+    const auto overlaps = [&](const QString &path) {
+        const QString abs = QFileInfo(path).canonicalFilePath();
+        if (abs.isEmpty() || root.isEmpty()) return false;
+#ifdef Q_OS_WIN
+        constexpr auto sensitivity = Qt::CaseInsensitive;
+#else
+        constexpr auto sensitivity = Qt::CaseSensitive;
+#endif
+        return root.compare(abs, sensitivity) == 0 || root.startsWith(abs + '/', sensitivity) ||
+               abs.startsWith(root + '/', sensitivity);
+    };
+    if (root.isEmpty() || QDir(root).isRoot() || overlaps(Settings::instancesDir()) ||
+        overlaps(Settings::backupsDir()) || overlaps(Settings::trashDir()) ||
+        overlaps(Settings::gameSaveDir(instance.data.value("saveFolderName").toString(), false)) ||
+        overlaps(Settings::gameSaveDir(instance.data.value("saveFolderName").toString(), true))) {
+        QMessageBox::warning(this, "Invalid Update Folder", "Select an installation folder separate from your saves and backups.");
+        return;
+    }
+    const auto cancel = std::make_shared<std::atomic_bool>(false);
+    m_updateCancel = cancel;
+    ++m_updateRevision;
+    setUiEnabled(false);
+    m_cancelUpdate->setEnabled(true);
+    m_cancelUpdate->show();
+    m_progressBar->setRange(0, 0);
+    m_statusLabel->setText("Checking for an instance update…");
+    auto *watcher = new QFutureWatcher<InstanceUpdater::Result>(this);
+    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, name, directory, thenLaunch]() {
+        const auto result = watcher->result();
+        watcher->deleteLater();
+        m_updateCancel.reset();
+        m_cancelUpdate->hide();
+        m_progressBar->setRange(0, 100);
+        m_progressBar->setAnimatedValue(0);
+        setUiEnabled(true);
+        if (!result.error.isEmpty()) {
+            m_statusLabel->setText(result.error == "Cancelled" ? "Update cancelled" : "Instance update failed");
+            if (result.error == "Cancelled") return;
+            if (thenLaunch && !InstanceUpdater::needsRecovery(directory)) {
+                if (QMessageBox::question(this, "Update Failed", result.error + "\n\nLaunch the current installation?",
+                                          QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes)
+                    launchSelected(name);
+            } else {
+                QMessageBox::warning(this, "Update Failed", result.error);
+            }
+            return;
+        }
+        refreshInstances();
+        if (thenLaunch) launchSelected(name);
+        else if (result.version.isEmpty()) m_statusLabel->setText("Installation recovered");
+        else m_statusLabel->setText(QString("Version %1 ready (%2 files downloaded)").arg(result.version).arg(result.downloaded));
+    });
+    const QPointer<MainWindow> window(this);
+    m_updateFuture = QtConcurrent::run([directory, manifest, cancel, window, thenLaunch]() {
+        return InstanceUpdater::run(directory, manifest, true, *cancel,
+            [window](const QString &message, int percent) {
+                if (!window) return;
+                QMetaObject::invokeMethod(window.data(), [window, message, percent]() {
+                    if (!window || !window->m_updateCancel) return;
+                    window->m_statusLabel->setText(message);
+                    window->m_progressBar->setRange(0, percent < 0 ? 0 : 100);
+                    if (percent >= 0) window->m_progressBar->setAnimatedValue(percent);
+                    if (message == "Applying instance update…") window->m_cancelUpdate->setEnabled(false);
+                }, Qt::QueuedConnection);
+            }, thenLaunch);
+    });
+    watcher->setFuture(m_updateFuture);
 }
 
 void MainWindow::onCreate() {

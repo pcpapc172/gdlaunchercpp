@@ -1,4 +1,5 @@
 #include "InstanceManager.h"
+#include "InstanceUpdater.h"
 #include "Settings.h"
 #include <QDir>
 #include <QFile>
@@ -47,6 +48,29 @@ static QString instanceJsonPath(const QString &instancePath) {
     return instancePath + "/instance.json";
 }
 
+QString InstanceManager::installationDir(const QJsonObject &data) {
+    if (data.value("versionType").toString() == "local") {
+        const QString version = data.value("version").toString();
+        if (version.isEmpty() || QDir::isAbsolutePath(version) || QDir::cleanPath(version) != version ||
+            version == "." || version == ".." || version.startsWith("../") || version.contains('\\'))
+            return {};
+        return Settings::versionsDir() + "/" + version;
+    }
+    const QString exe = data.value("executablePath").toString();
+    return QFileInfo(exe).isAbsolute() ? QFileInfo(exe).absolutePath() : QString();
+}
+
+QString InstanceManager::updateManifest(const QJsonObject &data) {
+    const QString overrideUrl = data.value("updateManifest").toString();
+    if (!overrideUrl.isEmpty()) return overrideUrl;
+    if (data.value("versionType").toString() != "local") return {};
+    const QString directory = installationDir(data);
+    if (directory.isEmpty()) return {};
+    QFile config(directory + "/version.json");
+    if (!config.open(QIODevice::ReadOnly) || config.size() > 65536) return {};
+    return QJsonDocument::fromJson(config.readAll()).object().value("update_manifest").toString();
+}
+
 QVector<InstanceInfo> InstanceManager::getInstances() {
     QVector<InstanceInfo> out;
     QDir dir(Settings::instancesDir());
@@ -77,6 +101,8 @@ QVector<InstanceInfo> InstanceManager::getInstances() {
             const QString exePath = info.data.value("executablePath").toString();
             info.version = QFileInfo(exePath).dir().dirName();
         }
+        const QString release = InstanceUpdater::installedVersion(installationDir(info.data));
+        if (!release.isEmpty()) info.version = release;
         out.push_back(info);
     }
     std::sort(out.begin(), out.end(), [](const InstanceInfo &a, const InstanceInfo &b) {
@@ -131,6 +157,8 @@ QJsonObject InstanceManager::buildInstanceJson(const QJsonObject &data, const QS
     instanceData["isGeodeCompatible"] = data.contains("isGeodeCompatible") ? data.value("isGeodeCompatible") : QJsonValue(true);
     instanceData["useMegaHack"] = data.contains("useMegaHack") ? data.value("useMegaHack") : QJsonValue(true);
     instanceData["useSteamEmu"] = data.value("useSteamEmu").toBool(false);
+    instanceData["updateManifest"] = data.value("updateManifest").toString();
+    instanceData["updateBeforeLaunch"] = data.value("updateBeforeLaunch").toBool(true);
     instanceData["arguments"] = data.value("arguments").toString();
     instanceData["protonVersion"] = data.value("protonVersion").toString("default");
     instanceData["skipRestartCheck"] = data.value("skipRestartCheck").toBool(false);

@@ -1,6 +1,7 @@
 #include "InstanceDialog.h"
 #include "ProtonVersionCombo.h"
 #include "../VersionManager.h"
+#include "../InstanceUpdater.h"
 #include "Theme.h"
 #include "Animations.h"
 #include <QVBoxLayout>
@@ -84,6 +85,13 @@ InstanceDialog::InstanceDialog(QWidget *parent, bool editMode, const QJsonObject
     m_argumentsEdit->setPlaceholderText("Optional arguments, e.g. --flag \"value with spaces\"");
     m_argumentsEdit->setToolTip("Arguments passed to the selected executable (or Steam emulator). Quote values containing spaces. These are not shell commands or environment variables.");
     form->addRow("Launch Arguments:", m_argumentsEdit);
+    m_updateManifest = new QLineEdit(existingData.value("updateManifest").toString(), this);
+    m_updateManifest->setPlaceholderText("https://pcpapc172.ir/archive/updates/…");
+    m_updateManifest->setToolTip("Optional override for the installation's update manifest. Updates affect every instance using this folder.");
+    form->addRow("Update Manifest URL:", m_updateManifest);
+    m_updateBeforeLaunch = new QCheckBox("Automatically update before launch", this);
+    m_updateBeforeLaunch->setChecked(existingData.value("updateBeforeLaunch").toBool(true));
+    form->addRow(QString(), m_updateBeforeLaunch);
 #ifdef Q_OS_LINUX
     m_protonVersion = makeProtonVersionCombo(this, existingData.value("protonVersion").toString("default"), true);
     form->addRow("GE-Proton Version:", m_protonVersion);
@@ -290,7 +298,14 @@ void InstanceDialog::onSave() {
     const QString name = m_nameEdit->text().trimmed();
     if (name.isEmpty()) { QMessageBox::warning(this, "Invalid name", "Invalid name."); return; }
 
+    const QString manifest = m_updateManifest->text().trimmed();
+    if (!manifest.isEmpty() && !InstanceUpdater::validUrl(QUrl(manifest, QUrl::StrictMode))) {
+        QMessageBox::warning(this, "Invalid Update URL", "Enter a valid HTTPS manifest URL.");
+        return;
+    }
     QJsonObject data;
+    data["updateManifest"] = manifest;
+    data["updateBeforeLaunch"] = m_updateBeforeLaunch->isChecked();
     data["name"] = name;
     data["arguments"] = m_argumentsEdit->text();
     const QString protonChoice = m_protonVersion ? protonVersionChoice(m_protonVersion)
