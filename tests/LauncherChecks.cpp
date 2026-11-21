@@ -124,30 +124,55 @@ void instanceUpdateChecks(const QString &root) {
         return QJsonObject{{"path", path}, {"url", url}, {"size", body.size()},
             {"sha256", QString::fromLatin1(QCryptographicHash::hash(body, QCryptographicHash::Sha256).toHex())}};
     };
-    const auto publish = [&](const QString &version, const QJsonArray &files) {
-        responses["/latest.json"] = QJsonDocument(
-            QJsonObject{{"formatVersion", 1}, {"version", version}, {"files", files}}).toJson();
+    const auto publish = [&](const QString &version, const QJsonArray &files, int updateNumber = 3) {
+        responses["/latest.json"] = QJsonDocument(QJsonObject{
+            {"formatVersion", 1}, {"version", version}, {"files", files},
+            {"installationId", "2.2/fixture"}, {"updateNumber", updateNumber}
+        }).toJson();
     };
     const auto exe = entry("GeometryDash.exe", "game", "new");
     const auto unchanged = entry("Resources/unchanged.txt", "unchanged", "keep");
     responses["/game"] = "new";
-    publish("2.2", {exe, unchanged});
+    publish("2.2", {exe, unchanged}, 1);
     std::atomic_bool cancelled(false);
-    const auto scan = InstanceUpdater::run(install, url, false, cancelled);
-    check(scan.available && scan.version == "2.2" && requests["/game"] == 0, "scan only fetches metadata");
-    const auto update = InstanceUpdater::run(install, url, true, cancelled);
+    const QUrl indexUrl = url.resolved(QUrl("updates.json"));
+    auto index = InstanceUpdater::readIndex(indexUrl, cancelled);
+    check(index.error.isEmpty() && index.missing && index.manifests.isEmpty(), "404 index means no published updates");
+    responses["/updates.json"] = R"({"formatVersion":1,"updates":{"2.2/fixture":"latest.json"}})";
+    index = InstanceUpdater::readIndex(indexUrl, cancelled);
+    check(index.error.isEmpty() && index.manifests.value("2.2/fixture") == url &&
+          !index.manifests.contains("2.2/another"), "resolve server manifest by installation ID");
+    responses["/updates.json"] = R"({"formatVersion":1,"updates":{"2.2/fixture":"file:///tmp/untrusted"}})";
+    check(!InstanceUpdater::readIndex(indexUrl, cancelled).error.isEmpty(), "reject non-network update sources");
+    const auto wrong = InstanceUpdater::run(install, url, false, cancelled, {}, false, "2.2/another");
+    check(!wrong.error.isEmpty(), "reject a manifest for another installation");
+    const auto scan = InstanceUpdater::run(install, url, false, cancelled, {}, false, "2.2/fixture");
+    check(scan.available && scan.version == "2.2" && scan.updateNumber == 1 &&
+          requests["/game"] == 0, "scan only fetches metadata for this installation");
+    const auto update = InstanceUpdater::run(install, url, true, cancelled, {}, false, "2.2/fixture");
     check(update.error.isEmpty() && update.downloaded == 1 && requests["/game"] == 1 &&
           requests["/unchanged"] == 0, "updater downloads only the changed file");
     check(get(install + "/GeometryDash.exe") == "new" &&
           get(install + "/CCGameManager.dat") == "my saves" &&
-          InstanceUpdater::installedVersion(install) == "2.2", "update preserves saves and records installed version");
+          InstanceUpdater::installedVersion(install) == "2.2" &&
+          InstanceUpdater::installedUpdateNumber(install) == 1, "update records version and number and preserves saves");
 
-    publish("2.3", {entry("GeometryDash.exe", "game", "next"), entry("asset", "corrupt", "good")});
+    publish("2.2 rebuild", {exe, unchanged}, 2);
+    const auto newer = InstanceUpdater::run(install, url, true, cancelled);
+    check(newer.error.isEmpty() && newer.downloaded == 0 &&
+          InstanceUpdater::installedUpdateNumber(install) == 2, "a newer number can reuse identical files");
+    publish("2.2", {entry("GeometryDash.exe", "game", "old"), unchanged}, 1);
+    responses["/game"] = "old";
+    const auto older = InstanceUpdater::run(install, url, true, cancelled);
+    check(older.error.isEmpty() && !older.available && requests["/game"] == 1 &&
+          get(install + "/GeometryDash.exe") == "new", "an older update cannot roll back installed files");
+
+    publish("2.3", {entry("GeometryDash.exe", "game", "next"), entry("asset", "corrupt", "good")}, 3);
     responses["/game"] = "next";
     responses["/corrupt"] = "fail";
     const auto invalid = InstanceUpdater::run(install, url, true, cancelled);
     check(invalid.error.contains("SHA-256") && get(install + "/GeometryDash.exe") == "new" &&
-          !QFileInfo::exists(install + "/asset") && InstanceUpdater::installedVersion(install) == "2.2",
+          !QFileInfo::exists(install + "/asset") && InstanceUpdater::installedVersion(install) == "2.2 rebuild",
           "checksum failure leaves the entire installation unchanged");
 
     publish("2.3", {entry("../outside", "game", "next")});

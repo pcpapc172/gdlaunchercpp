@@ -80,6 +80,8 @@ private:
     bool m_closePromptOpen = false;
 
     QMap<QString, InstanceUpdater::Result> m_instanceUpdates;
+    InstanceUpdater::Index m_updateIndex;
+    QString updateManifest(const QJsonObject &data) const;
     std::shared_ptr<std::atomic_bool> m_updateCancel;
     QFuture<InstanceUpdater::Result> m_updateFuture;
     std::shared_ptr<std::atomic_bool> m_scanCancel = std::make_shared<std::atomic_bool>(false);

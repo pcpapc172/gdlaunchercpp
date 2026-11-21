@@ -40,6 +40,7 @@
 #include <QIcon>
 #include <QFileDialog>
 #include <algorithm>
+#include <tuple>
 #include <QDir>
 #include <QFileInfo>
 #include <QDialogButtonBox>
@@ -98,7 +99,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     btnCol->setSpacing(UiMetrics::kTightSpacing);
     m_launchBtn = new QPushButton(style->standardIcon(QStyle::SP_MediaPlay), "Launch", this);
     m_launchBtn->setObjectName("primary");
-    m_updatesBtn = new QPushButton("Updates", this);
+    m_updatesBtn = new QPushButton(style->standardIcon(QStyle::SP_BrowserReload), "Updates", this);
     m_updatesBtn->setStyleSheet("padding-right: 26px;");
     m_updatesBadge = new QLabel(m_updatesBtn);
     m_updatesBadge->setAttribute(Qt::WA_TransparentForMouseEvents);
@@ -303,9 +304,9 @@ void MainWindow::runStartupChecks() {
         Settings::save(m_settings);
 
         const QStringList entries = {
-            "Updates shows available instance versions and how many updates are waiting.",
-            "Instance updates verify file hashes and download only changed or missing files.",
-            "Configure a manifest in Edit Instance to enable automatic updates before launch."
+            "Installed versions find updates automatically from pcpapc172.ir.",
+            "Updates shows the version label and update number for each release.",
+            "Geode Alpha 2.2091 can update to Geode v6.0.0-alpha.3."
         };
         ChangelogDialog dlg(this, m_appVersion, entries);
         dlg.exec();
@@ -385,9 +386,9 @@ void MainWindow::refreshInstances() {
     for (auto it = m_instanceUpdates.begin(); it != m_instanceUpdates.end();) {
         const auto found = std::find_if(m_instances.cbegin(), m_instances.cend(),
                                        [&](const InstanceInfo &i) { return i.name == it.key(); });
-        if (found == m_instances.cend() || InstanceManager::updateManifest(found->data).isEmpty() ||
-            (it->error.isEmpty() && it->version ==
-                 InstanceUpdater::installedVersion(InstanceManager::installationDir(found->data)) &&
+        if (found == m_instances.cend() || updateManifest(found->data).isEmpty() ||
+            (it->error.isEmpty() &&
+             InstanceUpdater::matchesInstalledRelease(InstanceManager::installationDir(found->data), *it) &&
              !InstanceUpdater::needsRecovery(InstanceManager::installationDir(found->data))))
             it = m_instanceUpdates.erase(it);
         else ++it;
@@ -436,7 +437,7 @@ void MainWindow::onSelectionChanged() {
 void MainWindow::onLaunch() {
     for (const auto &instance : m_instances) {
         if (instance.name != m_selectedInstance) continue;
-        const QString manifest = InstanceManager::updateManifest(instance.data);
+        const QString manifest = updateManifest(instance.data);
         if (!manifest.isEmpty() && instance.data.value("updateBeforeLaunch").toBool(true))
             startInstanceUpdate(instance, true);
         else
@@ -461,24 +462,40 @@ void MainWindow::updateBadge() {
     m_updatesBtn->setAccessibleName(count ? QString("Updates (%1 available)").arg(count) : "Updates");
 }
 
+QString MainWindow::updateManifest(const QJsonObject &data) const {
+    const QString local = InstanceManager::updateManifest(data);
+    if (!local.isEmpty()) return local;
+    if (data.value("versionType").toString() != "local") return {};
+    return m_updateIndex.manifests.value(data.value("version").toString()).toString(QUrl::FullyEncoded);
+}
+
 void MainWindow::scanInstanceUpdates() {
     if (m_scanningUpdates || m_updateCancel) return;
-    struct Source { QString name; QString directory; QUrl url; };
+    struct Source { QString name; QString directory; QUrl overrideUrl; QString versionId; };
+    struct Scan {
+        InstanceUpdater::Index index;
+        QMap<QString, InstanceUpdater::Result> results;
+    };
     QList<Source> sources;
     for (const auto &instance : m_instances) {
-        const QString manifest = InstanceManager::updateManifest(instance.data);
-        if (!manifest.isEmpty())
-            sources.append({instance.name, InstanceManager::installationDir(instance.data), QUrl(manifest, QUrl::StrictMode)});
+        if (!instance.valid) continue;
+        const QString config = InstanceManager::updateManifest(instance.data);
+        const QString versionId = instance.data.value("versionType").toString() == "local"
+            ? instance.data.value("version").toString() : QString();
+        sources.append({instance.name, InstanceManager::installationDir(instance.data),
+                        QUrl(config, QUrl::StrictMode), versionId});
     }
-    if (sources.isEmpty()) return;
     m_scanningUpdates = true;
     emit instanceUpdateListChanged();
     const unsigned revision = m_updateRevision;
-    auto *watcher = new QFutureWatcher<QMap<QString, InstanceUpdater::Result>>(this);
+    auto *watcher = new QFutureWatcher<Scan>(this);
     connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, revision]() {
         m_scanningUpdates = false;
         if (revision == m_updateRevision) {
-            m_instanceUpdates = watcher->result();
+            const auto scan = watcher->result();
+            if (scan.index.error.isEmpty()) m_updateIndex = scan.index;
+            else m_updateIndex.error = scan.index.error;
+            m_instanceUpdates = scan.results;
             updateBadge();
         } else {
             QTimer::singleShot(0, this, [this]() { scanInstanceUpdates(); });
@@ -486,17 +503,24 @@ void MainWindow::scanInstanceUpdates() {
         watcher->deleteLater();
         emit instanceUpdateListChanged();
     });
-    watcher->setFuture(QtConcurrent::run([sources, cancelled = m_scanCancel]() {
-        QMap<QPair<QString, QUrl>, InstanceUpdater::Result> checked;
-        QMap<QString, InstanceUpdater::Result> results;
+    watcher->setFuture(QtConcurrent::run([sources, cancelled = m_scanCancel, cached = m_updateIndex.manifests]() {
+        const QUrl indexUrl("https://pcpapc172.ir/archive/updates.json");
+        Scan scan;
+        scan.index = InstanceUpdater::readIndex(indexUrl, *cancelled);
+        if (scan.index.missing)
+            scan.index.manifests.insert("2.2/2.2091-geodealpha", QUrl("https://pcpapc172.ir/archive/update.json"));
+        const auto &manifests = scan.index.error.isEmpty() ? scan.index.manifests : cached;
+        QMap<std::tuple<QString, QUrl, QString>, InstanceUpdater::Result> checked;
         for (const auto &source : sources) {
             if (cancelled->load()) break;
-            const auto key = qMakePair(source.directory, source.url);
+            const QUrl url = source.overrideUrl.isEmpty() ? manifests.value(source.versionId) : source.overrideUrl;
+            if (url.isEmpty()) continue;
+            const auto key = std::make_tuple(source.directory, url, source.versionId);
             if (!checked.contains(key))
-                checked.insert(key, InstanceUpdater::run(source.directory, source.url, false, *cancelled));
-            results.insert(source.name, checked.value(key));
+                checked.insert(key, InstanceUpdater::run(source.directory, url, false, *cancelled, {}, false, source.versionId));
+            scan.results.insert(source.name, checked.value(key));
         }
-        return results;
+        return scan;
     }));
 }
 
@@ -523,32 +547,41 @@ void MainWindow::showInstanceUpdates() {
     auto *install = buttons->addButton("Update Selected", QDialogButtonBox::AcceptRole);
     layout->addWidget(buttons);
     const auto populate = [&]() {
-        const QString selectedName = names.value(table->currentRow());
+        const QString selectedName = names.value(table->currentRow(), m_selectedInstance);
         names.clear();
         table->setRowCount(0);
         QStringList errors;
-        bool hasSources = false;
         for (const auto &instance : m_instances) {
             const bool recovery = InstanceUpdater::needsRecovery(InstanceManager::installationDir(instance.data));
-            if (!recovery && InstanceManager::updateManifest(instance.data).isEmpty()) continue;
-            hasSources = true;
+            if (!recovery && updateManifest(instance.data).isEmpty()) continue;
             const auto update = m_instanceUpdates.value(instance.name);
             if (!update.error.isEmpty()) errors.append(instance.name + ": " + update.error);
             if ((!update.available || !update.error.isEmpty()) && !recovery) continue;
             const int row = table->rowCount();
             table->insertRow(row);
-            table->setItem(row, 0, new QTableWidgetItem(instance.name));
-            table->setItem(row, 1, new QTableWidgetItem(instance.version));
-            table->setItem(row, 2, new QTableWidgetItem(recovery ? "Recovery required" : update.version));
+            auto *name = new QTableWidgetItem(instance.name);
+            const QString installationId = instance.data.value("versionType").toString() == "local"
+                ? instance.data.value("version").toString() : QString();
+            name->setToolTip(installationId);
+            table->setItem(row, 0, name);
+            QString installed = instance.version;
+            const int installedNumber = InstanceUpdater::installedUpdateNumber(InstanceManager::installationDir(instance.data));
+            if (installedNumber > 0) installed += QString(" (Update %1)").arg(installedNumber);
+            table->setItem(row, 1, new QTableWidgetItem(installed));
+            QString available = recovery ? "Recovery required" : update.version;
+            if (!recovery && update.updateNumber > 0) available += QString(" (Update %1)").arg(update.updateNumber);
+            auto *release = new QTableWidgetItem(available);
+            release->setToolTip(available);
+            table->setItem(row, 2, release);
             names.append(instance.name);
         }
         QStringList messages;
         if (m_scanningUpdates) messages.append("Checking for updates…");
-        else if (!hasSources) messages.append("Set an Update Manifest URL in Edit Instance to receive updates.");
+        else if (!m_updateIndex.error.isEmpty()) messages.append("Could not check for updates: " + m_updateIndex.error);
         else if (names.isEmpty() && errors.isEmpty()) messages.append("No instance updates available.");
         messages.append(errors);
         details->setText(messages.join('\n'));
-        refresh->setEnabled(hasSources && !m_scanningUpdates);
+        refresh->setEnabled(!m_scanningUpdates);
         install->setEnabled(!names.isEmpty() && !m_launcher->isGameRunning() && !m_launcher->isLaunching());
         if (!names.isEmpty()) table->selectRow(qMax(0, names.indexOf(selectedName)));
     };
@@ -557,6 +590,7 @@ void MainWindow::showInstanceUpdates() {
     connect(install, &QPushButton::clicked, &dialog, &QDialog::accept);
     connect(refresh, &QPushButton::clicked, &dialog, [this]() { scanInstanceUpdates(); });
     populate();
+    if (!m_scanningUpdates) scanInstanceUpdates();
     if (dialog.exec() == QDialog::Accepted && table->currentRow() >= 0) {
         const QString name = names.value(table->currentRow());
         for (const auto &instance : m_instances) {
@@ -570,7 +604,9 @@ void MainWindow::startInstanceUpdate(const InstanceInfo &instance, bool thenLaun
         m_launcher->isSyncing() || m_launcher->isToolRunning()) return;
     const QString name = instance.name;
     const QString directory = InstanceManager::installationDir(instance.data);
-    const QUrl manifest(InstanceManager::updateManifest(instance.data), QUrl::StrictMode);
+    const QString installationId = instance.data.value("versionType").toString() == "local"
+        ? instance.data.value("version").toString() : QString();
+    const QUrl manifest(updateManifest(instance.data), QUrl::StrictMode);
     if (m_versionManager->hasActiveOperations()) {
         if (thenLaunch && !InstanceUpdater::needsRecovery(directory)) launchSelected(name);
         else QMessageBox::information(this, "Version Download Active", "Wait for the version download to finish before updating.");
@@ -630,7 +666,7 @@ void MainWindow::startInstanceUpdate(const InstanceInfo &instance, bool thenLaun
         else m_statusLabel->setText(QString("Version %1 ready (%2 files downloaded)").arg(result.version).arg(result.downloaded));
     });
     const QPointer<MainWindow> window(this);
-    m_updateFuture = QtConcurrent::run([directory, manifest, cancel, window, thenLaunch]() {
+    m_updateFuture = QtConcurrent::run([directory, installationId, manifest, cancel, window, thenLaunch]() {
         return InstanceUpdater::run(directory, manifest, true, *cancel,
             [window](const QString &message, int percent) {
                 if (!window) return;
@@ -641,7 +677,7 @@ void MainWindow::startInstanceUpdate(const InstanceInfo &instance, bool thenLaun
                     if (percent >= 0) window->m_progressBar->setAnimatedValue(percent);
                     if (message == "Applying instance update…") window->m_cancelUpdate->setEnabled(false);
                 }, Qt::QueuedConnection);
-            }, thenLaunch);
+            }, thenLaunch, installationId);
     });
     watcher->setFuture(m_updateFuture);
 }

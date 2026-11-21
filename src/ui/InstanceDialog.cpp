@@ -87,8 +87,8 @@ InstanceDialog::InstanceDialog(QWidget *parent, bool editMode, const QJsonObject
     form->addRow("Launch Arguments:", m_argumentsEdit);
     m_updateManifest = new QLineEdit(existingData.value("updateManifest").toString(), this);
     m_updateManifest->setPlaceholderText("https://pcpapc172.ir/archive/updates/…");
-    m_updateManifest->setToolTip("Optional override for the installation's update manifest. Updates affect every instance using this folder.");
-    form->addRow("Update Manifest URL:", m_updateManifest);
+    m_updateManifest->setToolTip("Leave blank to use the catalog update source. Updates affect every instance using this folder.");
+    form->addRow("Update URL Override:", m_updateManifest);
     m_updateBeforeLaunch = new QCheckBox("Automatically update before launch", this);
     m_updateBeforeLaunch->setChecked(existingData.value("updateBeforeLaunch").toBool(true));
     form->addRow(QString(), m_updateBeforeLaunch);

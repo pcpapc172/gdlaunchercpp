@@ -167,23 +167,31 @@ Instance Create/Edit includes a **Launch Arguments** field. Quoted values retain
 
 ### Instance updates
 
-Open **Edit** on an instance and set its **Update Manifest URL**. Game archives can also supply an
-`update_manifest` URL in their `version.json`. **Updates** shows the available versions and counts
-instances with pending updates. The automatic check runs before launch by default and can be
-disabled per instance. Instances that share an installation folder also share the updated files.
+**Updates** checks `https://pcpapc172.ir/archive/updates.json` for installed versions and shows
+the available releases. A catalog version uses its existing `category/version` installation ID.
+Players can override the source in **Edit Instance**. Automatic updates before launch can be
+disabled per instance. Instances that share an installation folder share updated files.
 
-Publish a JSON manifest and its files over HTTPS. For example, generate a manifest by listing the
-files the publisher manages:
+Publish an update by passing the existing installation ID and the changed game files to the
+publisher. Replace `./site/archive` with the real archive directory or a local copy of it.
 
 ```sh
-python3 tools/make-update-manifest.py 2.2091-r2 ./release GeometryDash.exe Resources/game.zip > latest.json
+python3 tools/make-update-manifest.py 2.2091-r2 ./release GeometryDash.exe Resources/game.zip \
+  --install-id 2.2/2.2091 --publish-dir ./site/archive
 ```
 
-Serve `latest.json` and upload those payloads at `files/GeometryDash.exe` and
-`files/Resources/game.zip` relative to it, or set `--url-prefix`. Publish the payloads before
-switching the manifest to a new release. Use a new `version` label each time you change the file list
-or any file contents. The schema uses `formatVersion: 1`, a string `version`, and `files` entries
-with `path`, `size` (bytes), `sha256` (hex), and `url` (relative or absolute).
+The command copies the files, creates a SHA-256 manifest, and updates `updates.json` last.
+If staging locally, upload the new `updates/` folder before replacing `updates.json` on the
+server. Start from a current copy of the website's archive so entries for other installations
+are preserved. Keep earlier release directories available for users who skip an update.
+Each new update inherits previously published file entries and increments `updateNumber` for that installation, starting at 1.
+
+The HTTPS index uses `{"formatVersion":1,"updates":{"2.2/2.2091":"updates/.../latest.json"}}`.
+Manifests use `formatVersion: 1`, a string `version`, an optional `installationId` matching the catalog entry,
+an optional positive integer `updateNumber`,
+and a `files` array with `path`,
+`size` in bytes, `sha256`, and `url`. To generate a standalone manifest for a custom source,
+omit `--install-id` and `--publish-dir`, then publish the manifest and the corresponding files.
 
 Each listed local file is checked by SHA-256. The updater downloads changed and missing files
 and verifies them before changing the installation. Files omitted from the manifest are preserved.

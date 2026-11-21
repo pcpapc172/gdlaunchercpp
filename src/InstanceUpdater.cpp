@@ -142,7 +142,8 @@ void recover(const QString &root, const QString &work) {
 }
 
 QUrl fetch(QNetworkAccessManager &network, const QUrl &url, qint64 limit,
-           const std::atomic_bool &cancelled, const std::function<void(const QByteArray &)> &consume) {
+           const std::atomic_bool &cancelled, const std::function<void(const QByteArray &)> &consume,
+           bool allowMissing = false) {
     require(!cancelled, "Cancelled");
     QNetworkRequest request(url);
     request.setTransferTimeout(30000);
@@ -182,6 +183,7 @@ QUrl fetch(QNetworkAccessManager &network, const QUrl &url, qint64 limit,
     drain();
     require(!cancelled, "Cancelled");
     require(error.isEmpty(), error);
+    if (allowMissing && reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() == 404) return {};
     require(reply->error() == QNetworkReply::NoError,
             QString("%1: %2").arg(url.path(), reply->errorString()));
     require(InstanceUpdater::validUrl(reply->url()), "Unsafe download URL");
@@ -209,11 +211,58 @@ bool InstanceUpdater::validUrl(const QUrl &url) {
         (url.scheme() == "https" || (local && url.scheme() == "http"));
 }
 
-QString InstanceUpdater::installedVersion(const QString &directory) {
+InstanceUpdater::Index InstanceUpdater::readIndex(const QUrl &url, const std::atomic_bool &cancelled) {
+    Index index;
+    try {
+        require(validUrl(url), "Invalid update index URL");
+        QByteArray json;
+        QNetworkAccessManager network;
+        const QUrl base = fetch(network, url, manifestLimit, cancelled,
+                                [&](const QByteArray &block) { json += block; }, true);
+        if (base.isEmpty()) {
+            index.missing = true;
+            return index;
+        }
+        const QJsonObject doc = QJsonDocument::fromJson(json).object();
+        require(doc.value("formatVersion").toInt() == 1 && doc.value("updates").isObject(),
+                "Invalid instance update index");
+        const auto updates = doc.value("updates").toObject();
+        for (auto it = updates.begin(); it != updates.end(); ++it) {
+            const QStringList parts = it.key().split('/');
+            require(parts.size() == 2 && validPath(it.key()), "Invalid version ID in update index: " + it.key());
+            const QString link = it.value().toString();
+            const QUrl manifest = base.resolved(QUrl(link, QUrl::StrictMode));
+            require(!link.isEmpty() && validUrl(manifest) &&
+                    (url.scheme() != "https" || manifest.scheme() == "https"),
+                    "Invalid update manifest URL for " + it.key());
+            index.manifests.insert(it.key(), manifest);
+        }
+    } catch (const Failure &failure) {
+        index.manifests.clear();
+        index.error = failure.message;
+    }
+    return index;
+}
+
+static QJsonObject readInstalledRelease(const QString &directory) {
     if (directory.isEmpty()) return {};
     const QString path = directory + '/' + stateName;
     if (isLink(QFileInfo(path))) return {};
-    return QJsonDocument::fromJson(readSmall(path)).object().value("version").toString();
+    return QJsonDocument::fromJson(readSmall(path)).object();
+}
+
+QString InstanceUpdater::installedVersion(const QString &directory) {
+    return readInstalledRelease(directory).value("version").toString();
+}
+
+int InstanceUpdater::installedUpdateNumber(const QString &directory) {
+    return readInstalledRelease(directory).value("updateNumber").toInt();
+}
+
+bool InstanceUpdater::matchesInstalledRelease(const QString &directory, const Result &release) {
+    const auto installed = readInstalledRelease(directory);
+    return !release.version.isEmpty() && release.version == installed.value("version").toString() &&
+        (release.updateNumber == 0 || release.updateNumber == installed.value("updateNumber").toInt());
 }
 
 bool InstanceUpdater::needsRecovery(const QString &directory) {
@@ -222,7 +271,7 @@ bool InstanceUpdater::needsRecovery(const QString &directory) {
 
 InstanceUpdater::Result InstanceUpdater::run(const QString &directory, const QUrl &manifest,
                                              bool install, const std::atomic_bool &cancelled,
-                                             const Progress &progress, bool onlyIfNew) {
+                                             const Progress &progress, bool onlyIfNew, const QString &installationId) {
     Result result;
     try {
         const QFileInfo directoryInfo(directory);
@@ -252,6 +301,16 @@ InstanceUpdater::Result InstanceUpdater::run(const QString &directory, const QUr
         require(doc.value("formatVersion").toInt() == 1 && !version.isEmpty() &&
                 version.size() <= 100 && version.simplified() == version &&
                 !files.isEmpty() && files.size() <= 5000, "Invalid instance update manifest");
+        if (doc.contains("installationId")) {
+            const QString target = doc.value("installationId").toString();
+            require(target.split('/').size() == 2 && validPath(target), "Invalid installation ID in update manifest");
+            require(installationId.isEmpty() || target == installationId,
+                    QString("This update is for %1, but this instance uses %2.").arg(target, installationId));
+        }
+        if (doc.contains("updateNumber")) {
+            result.updateNumber = doc.value("updateNumber").toInt(0);
+            require(result.updateNumber > 0, "Update number must be a positive integer");
+        }
         QList<Entry> entries;
         QSet<QString> paths;
         QHash<QString, QString> directories;
@@ -283,8 +342,17 @@ InstanceUpdater::Result InstanceUpdater::run(const QString &directory, const QUr
         for (auto it = directories.cbegin(); it != directories.cend(); ++it)
             require(!paths.contains(it.key()), "File and directory conflict: " + it.value());
         result.version = version;
-        const QString recorded = installedVersion(root);
-        result.available = version != recorded || needsRecovery(root);
+        const auto installed = readInstalledRelease(root);
+        const QString recorded = installed.value("version").toString();
+        const int installedNumber = installed.value("updateNumber").toInt();
+        // A numbered installation must never fall back to a stale or unnumbered manifest.
+        if (installedNumber > 0 && result.updateNumber <= installedNumber &&
+            (result.updateNumber < installedNumber || version != recorded)) {
+            result.version = recorded;
+            result.updateNumber = installedNumber;
+            return result;
+        }
+        result.available = version != recorded || result.updateNumber != installedNumber || needsRecovery(root);
         if (!install) {
             if (recorded.isEmpty() && !needsRecovery(root)) {
                 result.available = false;
@@ -344,7 +412,9 @@ InstanceUpdater::Result InstanceUpdater::run(const QString &directory, const QUr
                 journal.append(QJsonObject{{"path", entry.path}, {"existed", original.exists()}});
             }
             require(!cancelled, "Cancelled");
-            const auto state = QJsonDocument(QJsonObject{{"version", version}}).toJson(QJsonDocument::Compact);
+            QJsonObject installed{{"version", version}};
+            if (result.updateNumber > 0) installed["updateNumber"] = result.updateNumber;
+            const auto state = QJsonDocument(installed).toJson(QJsonDocument::Compact);
             writeAtomically(work + "/new/" + QString::number(journal.size()), state);
             journal.append(QJsonObject{{"path", stateName}, {"existed", QFileInfo::exists(root + '/' + stateName)}});
             const auto journalData = QJsonDocument(journal).toJson(QJsonDocument::Compact);
