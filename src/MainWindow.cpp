@@ -39,6 +39,7 @@
 #include <QApplication>
 #include <QIcon>
 #include <QFileDialog>
+#include <QSet>
 #include <algorithm>
 #include <tuple>
 #include <QDir>
@@ -100,16 +101,19 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     m_launchBtn = new QPushButton(style->standardIcon(QStyle::SP_MediaPlay), "Launch", this);
     m_launchBtn->setObjectName("primary");
     m_updatesBtn = new QPushButton(style->standardIcon(QStyle::SP_BrowserReload), "Updates", this);
-    m_updatesBtn->setStyleSheet("padding-right: 26px;");
+    m_updatesBtn->setStyleSheet("padding-right: 32px;");
     m_updatesBadge = new QLabel(m_updatesBtn);
     m_updatesBadge->setAttribute(Qt::WA_TransparentForMouseEvents);
     m_updatesBadge->setAlignment(Qt::AlignCenter);
-    m_updatesBadge->setMinimumSize(20, 20);
-    m_updatesBadge->setStyleSheet("background: #c62828; color: white; border-radius: 10px; font-weight: bold;");
+    m_updatesBadge->setObjectName("updatesCount");
+    m_updatesBadge->setFixedSize(22, 22);
+    m_updatesBadge->setStyleSheet(
+        "QLabel#updatesCount { background-color: #c62828; color: white; border: none; "
+        "border-radius: 11px; padding: 0; margin: 0; font-size: 10px; font-weight: bold; }");
     auto *badgeLayout = new QHBoxLayout(m_updatesBtn);
     badgeLayout->setContentsMargins(0, 0, 6, 0);
     badgeLayout->addStretch();
-    badgeLayout->addWidget(m_updatesBadge, 0, Qt::AlignVCenter);
+    badgeLayout->addWidget(m_updatesBadge, 0, Qt::AlignRight | Qt::AlignVCenter);
     m_updatesBadge->hide();
     m_createBtn = new QPushButton(style->standardIcon(QStyle::SP_FileDialogNewFolder), "Create", this);
     m_editBtn = new QPushButton(style->standardIcon(QStyle::SP_FileDialogDetailedView), "Edit", this);
@@ -304,9 +308,10 @@ void MainWindow::runStartupChecks() {
         Settings::save(m_settings);
 
         const QStringList entries = {
-            "Installed versions find updates automatically from pcpapc172.ir.",
-            "Updates shows the version label and update number for each release.",
-            "Geode Alpha 2.2091 can update to Geode v6.0.0-alpha.3."
+            "The instance list keeps the original version name after an update.",
+            "Installed update details are saved in version.json.",
+            "The Updates count is centered in a round badge.",
+            "New instance updates show an Open Updates prompt."
         };
         ChangelogDialog dlg(this, m_appVersion, entries);
         dlg.exec();
@@ -435,6 +440,7 @@ void MainWindow::onSelectionChanged() {
 }
 
 void MainWindow::onLaunch() {
+    scanInstanceUpdates();
     for (const auto &instance : m_instances) {
         if (instance.name != m_selectedInstance) continue;
         const QString manifest = updateManifest(instance.data);
@@ -460,6 +466,56 @@ void MainWindow::updateBadge() {
     m_updatesBadge->setText(count > 99 ? "99+" : QString::number(count));
     m_updatesBadge->setVisible(count > 0);
     m_updatesBtn->setAccessibleName(count ? QString("Updates (%1 available)").arg(count) : "Updates");
+}
+
+static QString updateAnnouncementKey(const QString &directory, const InstanceUpdater::Result &update) {
+    return directory + '\n' + update.version + '\n' + QString::number(update.updateNumber);
+}
+
+void MainWindow::notifyInstanceUpdates() {
+    if (m_scanningUpdates || !isVisible() || m_updateCancel || !m_updatesBtn->isEnabled() ||
+        m_launcher->isLaunching() || m_launcher->isGameRunning() || m_launcher->isSyncing() ||
+        m_launcher->isToolRunning()) return;
+
+    QSet<QString> pending;
+    QStringList versions;
+    for (const auto &instance : m_instances) {
+        const auto update = m_instanceUpdates.value(instance.name);
+        if (!update.available || !update.error.isEmpty()) continue;
+        const QString key = updateAnnouncementKey(InstanceManager::installationDir(instance.data), update);
+        if (m_announcedUpdates.contains(key) || pending.contains(key)) continue;
+        pending.insert(key);
+        versions.append(instance.version);
+    }
+    if (pending.isEmpty()) return;
+    if (QApplication::activeModalWidget()) {
+        if (!m_updatePromptScheduled) {
+            m_updatePromptScheduled = true;
+            QTimer::singleShot(350, this, [this]() {
+                m_updatePromptScheduled = false;
+                notifyInstanceUpdates();
+            });
+        }
+        return;
+    }
+
+    m_announcedUpdates.unite(pending);
+    auto *prompt = new QMessageBox(QMessageBox::Information, "Instance Update Available", QString(),
+                                   QMessageBox::NoButton, this);
+    prompt->setAttribute(Qt::WA_DeleteOnClose);
+    prompt->setTextFormat(Qt::PlainText);
+    prompt->setText(versions.size() == 1
+        ? QString("A new update for version %1 is available.").arg(versions.first())
+        : QString("New updates are available for these versions:\n%1").arg(versions.join('\n')));
+    auto *openUpdates = prompt->addButton("Open Updates", QMessageBox::AcceptRole);
+    auto *close = prompt->addButton("Close", QMessageBox::RejectRole);
+    prompt->setDefaultButton(openUpdates);
+    prompt->setEscapeButton(close);
+    connect(prompt, &QMessageBox::finished, this, [this, prompt, openUpdates]() {
+        if (prompt->clickedButton() == openUpdates)
+            QTimer::singleShot(0, this, &MainWindow::showInstanceUpdates);
+    });
+    prompt->open();
 }
 
 QString MainWindow::updateManifest(const QJsonObject &data) const {
@@ -502,10 +558,18 @@ void MainWindow::scanInstanceUpdates() {
         }
         watcher->deleteLater();
         emit instanceUpdateListChanged();
+        if (revision == m_updateRevision) notifyInstanceUpdates();
     });
     watcher->setFuture(QtConcurrent::run([sources, cancelled = m_scanCancel, cached = m_updateIndex.manifests]() {
         const QUrl indexUrl("https://pcpapc172.ir/archive/updates.json");
         Scan scan;
+        QSet<QString> installations;
+        for (const auto &source : sources) {
+            if (cancelled->load()) break;
+            if (installations.contains(source.directory)) continue;
+            installations.insert(source.directory);
+            InstanceUpdater::migrateInstalledRelease(source.directory);
+        }
         scan.index = InstanceUpdater::readIndex(indexUrl, *cancelled);
         if (scan.index.missing)
             scan.index.manifests.insert("2.2/2.2091-geodealpha", QUrl("https://pcpapc172.ir/archive/update.json"));
@@ -557,6 +621,8 @@ void MainWindow::showInstanceUpdates() {
             const auto update = m_instanceUpdates.value(instance.name);
             if (!update.error.isEmpty()) errors.append(instance.name + ": " + update.error);
             if ((!update.available || !update.error.isEmpty()) && !recovery) continue;
+            if (update.available && update.error.isEmpty())
+                m_announcedUpdates.insert(updateAnnouncementKey(InstanceManager::installationDir(instance.data), update));
             const int row = table->rowCount();
             table->insertRow(row);
             auto *name = new QTableWidgetItem(instance.name);
@@ -564,7 +630,8 @@ void MainWindow::showInstanceUpdates() {
                 ? instance.data.value("version").toString() : QString();
             name->setToolTip(installationId);
             table->setItem(row, 0, name);
-            QString installed = instance.version;
+            const QString recorded = InstanceUpdater::installedVersion(InstanceManager::installationDir(instance.data));
+            QString installed = recorded.isEmpty() ? instance.version : recorded;
             const int installedNumber = InstanceUpdater::installedUpdateNumber(InstanceManager::installationDir(instance.data));
             if (installedNumber > 0) installed += QString(" (Update %1)").arg(installedNumber);
             table->setItem(row, 1, new QTableWidgetItem(installed));

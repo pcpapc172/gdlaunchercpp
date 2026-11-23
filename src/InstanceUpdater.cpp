@@ -21,7 +21,9 @@
 
 namespace {
 const QString workName = ".gdlauncher-update";
-const QString stateName = ".gdlauncher-release.json";
+const QString stateName = "version.json";
+const QString legacyStateName = ".gdlauncher-release.json";
+const QString stateKey = "gdlauncher_update";
 const QString journalName = "/journal.json";
 const QString commitName = "/committed";
 const qint64 manifestLimit = 2 * 1024 * 1024;
@@ -122,7 +124,7 @@ void recover(const QString &root, const QString &work) {
         for (qsizetype i = rows.size(); i > 0; --i) {
             const auto row = rows[i - 1].toObject();
             const QString path = row.value("path").toString();
-            const bool state = path == stateName;
+            const bool state = path == stateName || path == legacyStateName;
             require(state || validPath(path), "Unsafe path in update recovery journal");
             checkDestination(root, path);
             const QString target = root + '/' + path;
@@ -244,11 +246,54 @@ InstanceUpdater::Index InstanceUpdater::readIndex(const QUrl &url, const std::at
     return index;
 }
 
-static QJsonObject readInstalledRelease(const QString &directory) {
-    if (directory.isEmpty()) return {};
-    const QString path = directory + '/' + stateName;
+static QJsonObject readReleaseFile(const QString &path) {
     if (isLink(QFileInfo(path))) return {};
     return QJsonDocument::fromJson(readSmall(path)).object();
+}
+
+static QJsonObject readInstalledRelease(const QString &directory) {
+    if (directory.isEmpty()) return {};
+    const auto release = readReleaseFile(directory + '/' + stateName).value(stateKey).toObject();
+    if (!release.value("version").toString().isEmpty()) return release;
+    return readReleaseFile(directory + '/' + legacyStateName);
+}
+
+static QJsonObject readVersionConfig(const QString &directory) {
+    checkDestination(directory, stateName);
+    const QString path = directory + '/' + stateName;
+    if (!QFileInfo::exists(path)) return {};
+    const auto config = QJsonDocument::fromJson(readSmall(path));
+    require(config.isObject(), "Could not preserve invalid version.json in " + directory);
+    return config.object();
+}
+
+static void migrateLegacyRelease(const QString &directory) {
+    const QString legacyPath = directory + '/' + legacyStateName;
+    const auto old = readReleaseFile(legacyPath);
+    if (old.value("version").toString().isEmpty()) return;
+    auto config = readVersionConfig(directory);
+    if (config.value(stateKey).toObject().value("version").toString().isEmpty()) {
+        config.insert(stateKey, old);
+        writeAtomically(directory + '/' + stateName, QJsonDocument(config).toJson());
+    }
+    QFile::remove(legacyPath);
+}
+
+void InstanceUpdater::migrateInstalledRelease(const QString &directory) {
+    if (directory.isEmpty()) return;
+    const QFileInfo info(directory);
+    const QString root = info.canonicalFilePath();
+    if (root.isEmpty() || !info.isDir() || isLink(info) ||
+        !QFileInfo::exists(root + '/' + legacyStateName)) return;
+    try {
+        const QString lockPath = root + "/.gdlauncher-update.lock";
+        checkDestination(root, ".gdlauncher-update.lock");
+        QLockFile lock(lockPath);
+        lock.setStaleLockTime(0);
+        if (lock.tryLock(0) && !needsRecovery(root)) migrateLegacyRelease(root);
+    } catch (const Failure &) {
+        // Keep reading the legacy marker until the installation config can be migrated.
+    }
 }
 
 QString InstanceUpdater::installedVersion(const QString &directory) {
@@ -287,6 +332,7 @@ InstanceUpdater::Result InstanceUpdater::run(const QString &directory, const QUr
             lock->setStaleLockTime(0);
             require(lock->tryLock(0), "This installation is already being updated");
             recover(root, work);
+            migrateLegacyRelease(root);
             if (manifest.isEmpty()) return result;
         }
         require(validUrl(manifest), "Enter an HTTPS update manifest URL");
@@ -319,6 +365,8 @@ InstanceUpdater::Result InstanceUpdater::run(const QString &directory, const QUr
             const QString path = row.value("path").toString();
             const QString key = path.normalized(QString::NormalizationForm_C).toCaseFolded();
             require(validPath(path) && !paths.contains(key), "Unsafe or duplicate update path: " + path);
+            require(path.section('/', 0, 0).compare(stateName, Qt::CaseInsensitive) != 0,
+                    "The launcher manages version.json; exclude it from update payloads.");
             paths.insert(key);
             const QString sha = row.value("sha256").toString();
             static const QRegularExpression hex("^[0-9a-fA-F]{64}$");
@@ -368,7 +416,7 @@ InstanceUpdater::Result InstanceUpdater::run(const QString &directory, const QUr
         }
         if (onlyIfNew && !result.available) return result;
 
-        checkDestination(root, stateName);
+        auto config = readVersionConfig(root);
         QList<Entry> changes;
         qint64 total = 0;
         if (progress) progress("Checking installed files…", -1);
@@ -414,7 +462,8 @@ InstanceUpdater::Result InstanceUpdater::run(const QString &directory, const QUr
             require(!cancelled, "Cancelled");
             QJsonObject installed{{"version", version}};
             if (result.updateNumber > 0) installed["updateNumber"] = result.updateNumber;
-            const auto state = QJsonDocument(installed).toJson(QJsonDocument::Compact);
+            config.insert(stateKey, installed);
+            const auto state = QJsonDocument(config).toJson();
             writeAtomically(work + "/new/" + QString::number(journal.size()), state);
             journal.append(QJsonObject{{"path", stateName}, {"existed", QFileInfo::exists(root + '/' + stateName)}});
             const auto journalData = QJsonDocument(journal).toJson(QJsonDocument::Compact);

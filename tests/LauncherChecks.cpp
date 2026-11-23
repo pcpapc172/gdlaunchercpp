@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <QApplication>
 #include <QCryptographicHash>
 #include <QTcpServer>
@@ -96,8 +97,10 @@ bool download(NongManager &manager, const NongSong &song, const QString &directo
     return success;
 }
 void instanceUpdateChecks(const QString &root) {
-    const QString install = root + "/updater-fixture";
+    const QString install = Settings::versionsDir() + "/2.2/fixture";
     put(install + "/GeometryDash.exe", "old");
+    put(install + "/version.json", R"({"executable":"GeometryDash.exe","use_steam_emu":true})");
+    put(Settings::instancesDir() + "/Updater Fixture/instance.json", R"({"versionType":"local","version":"2.2/fixture"})");
     put(install + "/Resources/unchanged.txt", "keep");
     put(install + "/CCGameManager.dat", "my saves");
     QTcpServer server;
@@ -156,6 +159,25 @@ void instanceUpdateChecks(const QString &root) {
           get(install + "/CCGameManager.dat") == "my saves" &&
           InstanceUpdater::installedVersion(install) == "2.2" &&
           InstanceUpdater::installedUpdateNumber(install) == 1, "update records version and number and preserves saves");
+    const auto versionConfig = QJsonDocument::fromJson(get(install + "/version.json")).object();
+    check(versionConfig.value("executable").toString() == "GeometryDash.exe" &&
+          versionConfig.value("use_steam_emu").toBool() &&
+          versionConfig.value("gdlauncher_update").toObject().value("updateNumber").toInt() == 1 &&
+          !QFileInfo::exists(install + "/.gdlauncher-release.json"),
+          "OTA mark lives in version.json and preserves launch settings");
+    const auto entries = InstanceManager::getInstances();
+    const auto fixture = std::find_if(entries.cbegin(), entries.cend(),
+                                     [](const InstanceInfo &i) { return i.name == "Updater Fixture"; });
+    check(fixture != entries.cend() && fixture->version == "2.2/fixture",
+          "installed OTA version does not replace the instance version label");
+    put(root + "/legacy/version.json", R"({"executable":"Custom.exe"})");
+    put(root + "/legacy/.gdlauncher-release.json", R"({"version":"old OTA","updateNumber":4})");
+    InstanceUpdater::migrateInstalledRelease(root + "/legacy");
+    const auto migrated = QJsonDocument::fromJson(get(root + "/legacy/version.json")).object();
+    check(migrated.value("executable").toString() == "Custom.exe" &&
+          migrated.value("gdlauncher_update").toObject().value("updateNumber").toInt() == 4 &&
+          !QFileInfo::exists(root + "/legacy/.gdlauncher-release.json"),
+          "migrate older OTA records without changing launch settings");
 
     publish("2.2 rebuild", {exe, unchanged}, 2);
     const auto newer = InstanceUpdater::run(install, url, true, cancelled);

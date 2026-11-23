@@ -1,5 +1,4 @@
 #include "InstanceManager.h"
-#include "InstanceUpdater.h"
 #include "Settings.h"
 #include <QDir>
 #include <QFile>
@@ -101,8 +100,6 @@ QVector<InstanceInfo> InstanceManager::getInstances() {
             const QString exePath = info.data.value("executablePath").toString();
             info.version = QFileInfo(exePath).dir().dirName();
         }
-        const QString release = InstanceUpdater::installedVersion(installationDir(info.data));
-        if (!release.isEmpty()) info.version = release;
         out.push_back(info);
     }
     std::sort(out.begin(), out.end(), [](const InstanceInfo &a, const InstanceInfo &b) {

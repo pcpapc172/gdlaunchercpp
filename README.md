@@ -195,4 +195,4 @@ omit `--install-id` and `--publish-dir`, then publish the manifest and the corre
 
 Each listed local file is checked by SHA-256. The updater downloads changed and missing files
 and verifies them before changing the installation. Files omitted from the manifest are preserved.
-Publish only game files and mod packages. Instance saves and Geode logs are excluded.
+Publish only game files and mod packages. Instance saves, Geode logs, and the launcher-managed root `version.json` are excluded. The list keeps the original installation version, and the installed OTA release is recorded under `gdlauncher_update` in `version.json`.

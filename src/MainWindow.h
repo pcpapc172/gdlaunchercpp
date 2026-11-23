@@ -2,6 +2,7 @@
 #include <QMainWindow>
 #include <QVector>
 #include <QMap>
+#include <QSet>
 #include <QFuture>
 #include <memory>
 #include "InstanceUpdater.h"
@@ -86,10 +87,13 @@ private:
     QFuture<InstanceUpdater::Result> m_updateFuture;
     std::shared_ptr<std::atomic_bool> m_scanCancel = std::make_shared<std::atomic_bool>(false);
     bool m_scanningUpdates = false;
+    bool m_updatePromptScheduled = false;
+    QSet<QString> m_announcedUpdates;
     unsigned m_updateRevision = 0;
 
     void scanInstanceUpdates();
     void showInstanceUpdates();
+    void notifyInstanceUpdates();
     void updateBadge();
     void startInstanceUpdate(const InstanceInfo &instance, bool thenLaunch);
     void launchSelected(const QString &name);

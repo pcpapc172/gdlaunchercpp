@@ -25,6 +25,7 @@ Index readIndex(const QUrl &url, const std::atomic_bool &cancelled);
 using Progress = std::function<void(const QString &, int)>;
 
 bool validUrl(const QUrl &url);
+void migrateInstalledRelease(const QString &directory);
 QString installedVersion(const QString &directory);
 int installedUpdateNumber(const QString &directory);
 bool matchesInstalledRelease(const QString &directory, const Result &release);

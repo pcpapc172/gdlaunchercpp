@@ -126,7 +126,7 @@ def main():
         leaf = relative.name.lower()
         first = relative.parts[0].lower()
         if (leaf == "instance.json" or leaf.startswith(("ccgamemanager", "cclocallevels", "ccbetterinfo"))
-                or first.startswith(".gdlauncher-") or first in ("geode-backups", "trashed-levels")
+                or first.startswith(".gdlauncher-") or first in ("version.json", "geode-backups", "trashed-levels")
                 or (first == "geode" and (len(relative.parts) < 3 or relative.parts[1].lower() != "mods"))):
             parser.error(f"file belongs to a save or launcher data: {name}")
         if path.stat().st_size > 8 * 1024**3:
